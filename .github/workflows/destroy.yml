@@ -1,0 +1,62 @@
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DESTROY to confirm'
+        required: true
+
+jobs:
+  destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'DESTROY'
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      TF_VAR_aws_region:   "us-east-1"
+      TF_VAR_environment:  "dev"
+      TF_VAR_alert_email:  ${{ secrets.ALERT_EMAIL }}
+      TF_VAR_github_repo:  "jill-break/Lakehouse-Architecture"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: "us-east-1"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Empty S3 bucket before destroy
+        run: |
+          BUCKET=$(cd terraform && terraform output -raw s3_bucket_name)
+          echo "Emptying s3://$BUCKET ..."
+          aws s3 rm s3://$BUCKET --recursive
+          echo "Bucket emptied."
+
+      - name: Delete Athena workgroup contents
+        run: |
+          aws athena delete-work-group \
+            --work-group ecommerce-lakehouse-dev \
+            --recursive-delete-option 2>/dev/null || echo "Workgroup already gone."
+
+      - name: Terraform Destroy
+        working-directory: terraform
+        run: terraform destroy -auto-approve
+
+      - name: Confirm destruction
+        run: echo "All infrastructure destroyed."

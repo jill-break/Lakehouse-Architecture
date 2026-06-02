@@ -1,0 +1,65 @@
+name: Upload Data & Trigger Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_type:
+        description: 'Data to upload'
+        required: true
+        default: 'good'
+        type: choice
+        options:
+          - good
+          - bad
+
+jobs:
+  upload:
+    name: Upload ${{ github.event.inputs.data_type }} data
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: pip install boto3 openpyxl pandas -q
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: "us-east-1"
+
+      - name: Setup Terraform (to get bucket name)
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+
+      - name: Get bucket name
+        id: bucket
+        working-directory: terraform
+        env:
+          TF_VAR_aws_region:   "us-east-1"
+          TF_VAR_environment:  "dev"
+          TF_VAR_alert_email:  ${{ secrets.ALERT_EMAIL }}
+          TF_VAR_github_repo:  "jill-break/Lakehouse-Architecture"
+        run: |
+          terraform init
+          echo "name=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
+
+      - name: Upload good data
+        if: github.event.inputs.data_type == 'good'
+        run: |
+          python scripts/upload_raw_data.py --bucket ${{ steps.bucket.outputs.name }}
+
+      - name: Upload bad data
+        if: github.event.inputs.data_type == 'bad'
+        run: |
+          python scripts/upload_bad_data.py --bucket ${{ steps.bucket.outputs.name }}
