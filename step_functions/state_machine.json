@@ -1,0 +1,248 @@
+{
+  "Comment": "Ecommerce Lakehouse ETL Pipeline — orchestrates Glue jobs for products, orders, and order_items, archives raw files on success, and optionally runs a Glue Crawler.",
+  "StartAt": "RunETLJobs",
+  "States": {
+    "RunETLJobs": {
+      "Type": "Parallel",
+      "Comment": "Run all three Glue ETL jobs concurrently",
+      "Branches": [
+        {
+          "StartAt": "GlueProducts",
+          "States": {
+            "GlueProducts": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "ecommerce-lakehouse-products",
+                "Arguments": {
+                  "--S3_BUCKET.$": "$.S3_BUCKET",
+                  "--RAW_PREFIX": "raw/products",
+                  "--DWH_PREFIX": "lakehouse-dwh/products",
+                  "--ARCHIVED_PREFIX": "archived/products",
+                  "--REJECTED_PREFIX": "rejected/products"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "GlueProductsFailed",
+                  "ResultPath": "$.error"
+                }
+              ],
+              "TimeoutSeconds": 1800,
+              "End": true
+            },
+            "GlueProductsFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn.$": "$.SNS_TOPIC_ARN",
+                "Message": "Glue job ecommerce-lakehouse-products FAILED",
+                "Subject": "Lakehouse Pipeline Alert: Products Job Failed"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "GlueOrders",
+          "States": {
+            "GlueOrders": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "ecommerce-lakehouse-orders",
+                "Arguments": {
+                  "--S3_BUCKET.$": "$.S3_BUCKET",
+                  "--RAW_PREFIX": "raw/orders",
+                  "--DWH_PREFIX": "lakehouse-dwh/orders",
+                  "--ARCHIVED_PREFIX": "archived/orders",
+                  "--REJECTED_PREFIX": "rejected/orders"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "GlueOrdersFailed",
+                  "ResultPath": "$.error"
+                }
+              ],
+              "TimeoutSeconds": 1800,
+              "End": true
+            },
+            "GlueOrdersFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn.$": "$.SNS_TOPIC_ARN",
+                "Message": "Glue job ecommerce-lakehouse-orders FAILED",
+                "Subject": "Lakehouse Pipeline Alert: Orders Job Failed"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "GlueOrderItems",
+          "States": {
+            "GlueOrderItems": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "ecommerce-lakehouse-order-items",
+                "Arguments": {
+                  "--S3_BUCKET.$": "$.S3_BUCKET",
+                  "--RAW_PREFIX": "raw/order_items",
+                  "--DWH_PREFIX": "lakehouse-dwh/order_items",
+                  "--ARCHIVED_PREFIX": "archived/order_items",
+                  "--REJECTED_PREFIX": "rejected/order_items",
+                  "--ORDERS_DWH_PREFIX": "lakehouse-dwh/orders"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "GlueOrderItemsFailed",
+                  "ResultPath": "$.error"
+                }
+              ],
+              "TimeoutSeconds": 1800,
+              "End": true
+            },
+            "GlueOrderItemsFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn.$": "$.SNS_TOPIC_ARN",
+                "Message": "Glue job ecommerce-lakehouse-order-items FAILED",
+                "Subject": "Lakehouse Pipeline Alert: Order Items Job Failed"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "RunGlueCrawler",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PipelineFailed",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+
+    "RunGlueCrawler": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+      "Parameters": {
+        "Name": "ecommerce-lakehouse-crawler"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["Glue.CrawlerRunningException"],
+          "Next": "WaitForCrawler",
+          "ResultPath": "$.crawlerError"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PipelineFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "WaitForCrawler"
+    },
+
+    "WaitForCrawler": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "CheckCrawlerStatus"
+    },
+
+    "CheckCrawlerStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+      "Parameters": {
+        "Name": "ecommerce-lakehouse-crawler"
+      },
+      "Next": "IsCrawlerDone"
+    },
+
+    "IsCrawlerDone": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Crawler.State",
+          "StringEquals": "READY",
+          "Next": "AthenaValidation"
+        }
+      ],
+      "Default": "WaitForCrawler"
+    },
+
+    "AthenaValidation": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "SELECT COUNT(*) AS product_count FROM lakehouse.products; SELECT COUNT(*) AS order_count FROM lakehouse.orders; SELECT COUNT(*) AS item_count FROM lakehouse.order_items;",
+        "WorkGroup": "primary",
+        "ResultConfiguration": {
+          "OutputLocation.$": "States.Format('s3://{}/athena-results/', $.S3_BUCKET)"
+        }
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PipelineFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "PipelineSuccess"
+    },
+
+    "PipelineSuccess": {
+      "Type": "Succeed"
+    },
+
+    "PipelineFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn.$": "$.SNS_TOPIC_ARN",
+        "Message.$": "States.Format('Lakehouse pipeline FAILED. Error: {}', $.error)",
+        "Subject": "Lakehouse Pipeline Alert: Critical Failure"
+      },
+      "Next": "FailState"
+    },
+
+    "FailState": {
+      "Type": "Fail",
+      "Error": "PipelineFailed",
+      "Cause": "One or more ETL steps failed — see SNS alert and CloudWatch logs for details."
+    }
+  }
+}

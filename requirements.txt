@@ -1,0 +1,16 @@
+# Runtime dependencies (available in Glue 4.0 environment)
+boto3>=1.26.0
+pandas>=1.5.0
+openpyxl>=3.1.0
+
+# Local development / testing
+pyspark==3.3.2
+delta-spark==2.3.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Linting
+flake8>=6.0.0
+black>=23.3.0

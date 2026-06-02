@@ -1,0 +1,10 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is git-ignored — never commit real values.
+
+aws_region       = "us-east-1"
+project_name     = "ecommerce-lakehouse"
+environment      = "dev"
+alert_email      = "your-email@example.com"
+glue_worker_type = "G.1X"
+glue_num_workers = 2
+github_repo      = "owner/repo-name"
