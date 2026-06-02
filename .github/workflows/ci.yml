@@ -1,6 +1,7 @@
 name: Lakehouse CI/CD
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths-ignore:
