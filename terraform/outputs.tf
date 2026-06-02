@@ -40,11 +40,6 @@ output "eventbridge_rule_name" {
   value       = module.eventbridge.rule_name
 }
 
-output "github_actions_role_arn" {
-  description = "ARN to paste into the AWS_ROLE_ARN GitHub secret"
-  value       = module.iam.github_actions_role_arn
-}
-
 output "sns_topic_arn" {
   description = "ARN of the SNS alert topic"
   value       = module.sns.topic_arn

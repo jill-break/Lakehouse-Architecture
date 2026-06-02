@@ -72,7 +72,6 @@ jobs:
       TF_VAR_aws_region:   "us-east-1"
       TF_VAR_environment:  "dev"
       TF_VAR_alert_email:  ${{ secrets.ALERT_EMAIL }}
-      TF_VAR_github_repo:  "jill-break/Lakehouse-Architecture"
 
     steps:
       - uses: actions/checkout@v4

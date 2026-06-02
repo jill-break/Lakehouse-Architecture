@@ -21,7 +21,6 @@ jobs:
       TF_VAR_aws_region:   "us-east-1"
       TF_VAR_environment:  "dev"
       TF_VAR_alert_email:  ${{ secrets.ALERT_EMAIL }}
-      TF_VAR_github_repo:  "jill-break/Lakehouse-Architecture"
 
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +36,7 @@ jobs:
         with:
           terraform_version: "~1.5"
 
-      - name: Terraform Init
+      - name: Terraform Init (main)
         working-directory: terraform
         run: terraform init
 
@@ -54,9 +53,21 @@ jobs:
             --work-group ecommerce-lakehouse-dev \
             --recursive-delete-option 2>/dev/null || echo "Workgroup already gone."
 
-      - name: Terraform Destroy
+      - name: Terraform Destroy (main)
         working-directory: terraform
         run: terraform destroy -auto-approve
 
-      - name: Confirm destruction
-        run: echo "All infrastructure destroyed."
+      # ── Re-apply bootstrap so CI can authenticate on the next run ─────────
+      - name: Terraform Init (bootstrap)
+        working-directory: terraform/bootstrap
+        run: terraform init
+
+      - name: Terraform Apply (bootstrap)
+        working-directory: terraform/bootstrap
+        run: terraform apply -auto-approve
+
+      - name: Done
+        run: |
+          echo "Infrastructure destroyed."
+          echo "Bootstrap resources (OIDC + GitHub Actions role) have been re-applied."
+          echo "CI is ready to run terraform apply on the next push to main."

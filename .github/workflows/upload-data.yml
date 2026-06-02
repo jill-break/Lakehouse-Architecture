@@ -49,7 +49,6 @@ jobs:
           TF_VAR_aws_region:  "us-east-1"
           TF_VAR_environment: "dev"
           TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
-          TF_VAR_github_repo: "jill-break/Lakehouse-Architecture"
         run: |
           terraform init -reconfigure
           echo "name=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
@@ -91,5 +90,5 @@ jobs:
         if: github.event.inputs.data_type == 'bad'
         run: |
           BUCKET="${{ steps.bucket.outputs.name }}"
-          aws s3api put-object --bucket $BUCKET --key raw/_READY --body /dev/null
+          touch /tmp/_READY && aws s3 cp /tmp/_READY s3://$BUCKET/raw/_READY
           echo "Pipeline triggered. Check s3://$BUCKET/rejected/ after it completes."

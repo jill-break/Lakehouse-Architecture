@@ -52,7 +52,6 @@ module "iam" {
   environment  = var.environment
   account_id   = local.account_id
   region       = local.region
-  github_repo  = var.github_repo
 }
 
 module "glue" {

@@ -37,8 +37,3 @@ variable "glue_num_workers" {
   type        = number
   default     = 2
 }
-
-variable "github_repo" {
-  description = "GitHub repository in owner/repo format (e.g. CourageDei/lakehouse-project)"
-  type        = string
-}
