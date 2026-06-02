@@ -75,7 +75,8 @@
       "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
       "Parameters": { "Name": "${glue_crawler_name}" },
       "Catch": [
-        { "ErrorEquals": ["Glue.CrawlerRunningException"], "Next": "WaitForCrawler", "ResultPath": "$.crawlerError" },
+        { "ErrorEquals": ["Glue.CrawlerRunningException"], "Next": "WaitForCrawler", "ResultPath": "$.crawlerError", "Comment": "Crawler already running — just wait for it" },
+        { "ErrorEquals": ["Glue.CrawlerNotRunningException"], "Next": "PipelineSuccess", "ResultPath": "$.crawlerError" },
         { "ErrorEquals": ["States.ALL"], "Next": "PipelineFailed", "ResultPath": "$.error" }
       ],
       "Next": "WaitForCrawler"

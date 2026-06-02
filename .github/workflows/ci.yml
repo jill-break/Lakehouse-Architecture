@@ -124,3 +124,17 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform output
+
+      - name: Package and upload Glue scripts to S3
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          BUCKET=$(terraform output -raw s3_bucket_name)
+          cd ../glue_jobs
+          python -c "import zipfile; z=zipfile.ZipFile('dist/common.zip','w'); z.write('common/__init__.py'); z.write('common/utils.py'); z.close(); print('Packaged common.zip')"
+          aws s3 cp dist/common.zip        s3://$BUCKET/glue-scripts/common.zip
+          aws s3 cp glue_products.py       s3://$BUCKET/glue-scripts/glue_products.py
+          aws s3 cp glue_orders.py         s3://$BUCKET/glue-scripts/glue_orders.py
+          aws s3 cp glue_order_items.py    s3://$BUCKET/glue-scripts/glue_order_items.py
+          aws s3 cp glue_generate_manifests.py s3://$BUCKET/glue-scripts/glue_generate_manifests.py
+          echo "All scripts uploaded to s3://$BUCKET/glue-scripts/"
