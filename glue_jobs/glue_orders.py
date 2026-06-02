@@ -7,21 +7,22 @@ Job parameters:
   --S3_BUCKET, --RAW_PREFIX, --DWH_PREFIX, --ARCHIVED_PREFIX, --REJECTED_PREFIX, --JOB_NAME
 """
 
+import io
 import sys
+
+import boto3
+import pandas as pd
+
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from pyspark.sql import functions as F
-from pyspark.sql.types import (
-    StructType, StructField,
-    IntegerType, LongType, DoubleType, StringType, TimestampType, DateType,
-)
+from pyspark.sql.types import IntegerType, LongType, DoubleType
 
 from common.utils import (
     drop_null_pk,
     drop_null_cols,
-    validate_timestamps,
     deduplicate,
     upsert_to_delta_partitioned,
     write_rejected,
@@ -61,8 +62,6 @@ REJECTED_PATH = f"s3://{BUCKET}/{args['REJECTED_PREFIX']}"
 # ---------------------------------------------------------------------------
 print(f"[orders] Reading raw data from {RAW_PATH}")
 
-import boto3, io, pandas as pd
-
 s3 = boto3.client("s3")
 paginator = s3.get_paginator("list_objects_v2")
 pages = paginator.paginate(Bucket=BUCKET, Prefix=args["RAW_PREFIX"])
@@ -71,7 +70,7 @@ raw_keys = [
     obj["Key"]
     for page in pages
     for obj in page.get("Contents", [])
-    if obj["Key"].endswith(".xlsx") or obj["Key"].endswith(".csv")
+    if obj["Key"].endswith((".xlsx", ".csv"))
 ]
 
 if not raw_keys:
@@ -81,7 +80,7 @@ if not raw_keys:
 
 dfs = []
 for key in raw_keys:
-    resp = s3.get_object(Bucket=BUCKET, Key=key)
+    resp = s3.get_object(Bucket=BUCKET, Key=key, ExpectedBucketOwner=args.get("AWS_ACCOUNT_ID", ""))
     body = resp["Body"].read()
     if key.endswith(".xlsx"):
         pdf = pd.read_excel(io.BytesIO(body), engine="openpyxl")
@@ -96,12 +95,12 @@ for d in dfs[1:]:
 # Cast columns to correct types
 raw_df = (
     raw_df
-    .withColumn("order_num",       F.col("order_num").cast(IntegerType()))
-    .withColumn("order_id",        F.col("order_id").cast(LongType()))
-    .withColumn("user_id",         F.col("user_id").cast(LongType()))
+    .withColumn("order_num", F.col("order_num").cast(IntegerType()))
+    .withColumn("order_id", F.col("order_id").cast(LongType()))
+    .withColumn("user_id", F.col("user_id").cast(LongType()))
     .withColumn("order_timestamp", F.to_timestamp(F.col("order_timestamp")))
-    .withColumn("total_amount",    F.col("total_amount").cast(DoubleType()))
-    .withColumn("date",            F.to_date(F.col("date")))
+    .withColumn("total_amount", F.col("total_amount").cast(DoubleType()))
+    .withColumn("date", F.to_date(F.col("date")))
 )
 print(f"[orders] Raw row count: {raw_df.count()}")
 

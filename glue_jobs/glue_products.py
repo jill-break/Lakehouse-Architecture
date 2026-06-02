@@ -13,6 +13,9 @@ Job parameters (--key value):
 """
 
 import sys
+
+import boto3
+
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
@@ -27,7 +30,7 @@ from common.utils import (
     drop_null_pk,
     drop_null_cols,
     deduplicate,
-    upsert_to_delta,
+    upsert_to_delta_partitioned,
     write_rejected,
     archive_s3_object,
 )
@@ -61,10 +64,10 @@ ARCHIVED_PREFIX = args["ARCHIVED_PREFIX"]
 REJECTED_PATH = f"s3://{BUCKET}/{args['REJECTED_PREFIX']}"
 
 PRODUCTS_SCHEMA = StructType([
-    StructField("product_id",   IntegerType(), nullable=False),
+    StructField("product_id", IntegerType(), nullable=False),
     StructField("department_id", IntegerType(), nullable=True),
-    StructField("department",   StringType(),  nullable=True),
-    StructField("product_name", StringType(),  nullable=True),
+    StructField("department", StringType(), nullable=True),
+    StructField("product_name", StringType(), nullable=True),
 ])
 
 # ---------------------------------------------------------------------------
@@ -102,7 +105,6 @@ valid_df = valid_df.withColumn("ingested_at", F.current_timestamp())
 # 5. Upsert into Delta table (partitioned by department)
 # ---------------------------------------------------------------------------
 print(f"[products] Upserting into Delta table at {DWH_PATH}")
-from common.utils import upsert_to_delta_partitioned
 upsert_to_delta_partitioned(
     spark=spark,
     source_df=valid_df,
@@ -120,7 +122,7 @@ write_rejected(rejected, REJECTED_PATH, "products")
 # ---------------------------------------------------------------------------
 # 7. Archive source files
 # ---------------------------------------------------------------------------
-s3_client = __import__("boto3").client("s3")
+s3_client = boto3.client("s3")
 paginator = s3_client.get_paginator("list_objects_v2")
 pages = paginator.paginate(Bucket=BUCKET, Prefix=args["RAW_PREFIX"])
 for page in pages:

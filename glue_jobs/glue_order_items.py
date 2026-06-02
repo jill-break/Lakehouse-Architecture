@@ -9,16 +9,19 @@ Job parameters:
   --REJECTED_PREFIX, --ORDERS_DWH_PREFIX, --JOB_NAME
 """
 
-import sys, io
+import io
+import sys
+
 import boto3
 import pandas as pd
+from delta.tables import DeltaTable
 
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from pyspark.sql import functions as F
-from pyspark.sql.types import IntegerType, LongType, TimestampType, DateType
+from pyspark.sql.types import IntegerType, LongType
 
 from common.utils import (
     drop_null_pk,
@@ -71,7 +74,7 @@ raw_keys = [
     obj["Key"]
     for page in pages
     for obj in page.get("Contents", [])
-    if obj["Key"].endswith(".xlsx") or obj["Key"].endswith(".csv")
+    if obj["Key"].endswith((".xlsx", ".csv"))
 ]
 
 if not raw_keys:
@@ -81,7 +84,7 @@ if not raw_keys:
 
 dfs = []
 for key in raw_keys:
-    resp = s3.get_object(Bucket=BUCKET, Key=key)
+    resp = s3.get_object(Bucket=BUCKET, Key=key, ExpectedBucketOwner=args.get("AWS_ACCOUNT_ID", ""))
     body = resp["Body"].read()
     pdf = pd.read_excel(io.BytesIO(body), engine="openpyxl") if key.endswith(".xlsx") else pd.read_csv(io.BytesIO(body))
     dfs.append(spark.createDataFrame(pdf))
@@ -93,15 +96,15 @@ for d in dfs[1:]:
 # Cast columns
 raw_df = (
     raw_df
-    .withColumn("id",                    F.col("id").cast(LongType()))
-    .withColumn("order_id",              F.col("order_id").cast(LongType()))
-    .withColumn("user_id",               F.col("user_id").cast(LongType()))
+    .withColumn("id", F.col("id").cast(LongType()))
+    .withColumn("order_id", F.col("order_id").cast(LongType()))
+    .withColumn("user_id", F.col("user_id").cast(LongType()))
     .withColumn("days_since_prior_order", F.col("days_since_prior_order").cast(IntegerType()))
-    .withColumn("product_id",            F.col("product_id").cast(LongType()))
-    .withColumn("add_to_cart_order",     F.col("add_to_cart_order").cast(IntegerType()))
-    .withColumn("reordered",             F.col("reordered").cast(IntegerType()))
-    .withColumn("order_timestamp",       F.to_timestamp(F.col("order_timestamp")))
-    .withColumn("date",                  F.to_date(F.col("date")))
+    .withColumn("product_id", F.col("product_id").cast(LongType()))
+    .withColumn("add_to_cart_order", F.col("add_to_cart_order").cast(IntegerType()))
+    .withColumn("reordered", F.col("reordered").cast(IntegerType()))
+    .withColumn("order_timestamp", F.to_timestamp(F.col("order_timestamp")))
+    .withColumn("date", F.to_date(F.col("date")))
 )
 print(f"[order_items] Raw row count: {raw_df.count()}")
 
@@ -124,8 +127,6 @@ rejected = rejected.union(ts_rejected) if rejected is not None else ts_rejected
 # ---------------------------------------------------------------------------
 # 3. Referential integrity: order_id must exist in orders Delta table
 # ---------------------------------------------------------------------------
-from delta.tables import DeltaTable
-
 if DeltaTable.isDeltaTable(spark, ORDERS_DWH_PATH):
     orders_ids = spark.read.format("delta").load(ORDERS_DWH_PATH).select("order_id").distinct()
     orphan_mask = ~F.col("order_id").isin([r.order_id for r in orders_ids.collect()])
