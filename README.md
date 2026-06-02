@@ -130,9 +130,12 @@ ingested_at           TIMESTAMP
 │   ├── variables.tf
 │   ├── outputs.tf
 │   ├── terraform.tfvars.example
+│   ├── bootstrap/                    # Separate state — OIDC provider + GitHub Actions role
+│   │   ├── main.tf                   # Never destroyed, survives full infrastructure teardown
+│   │   └── outputs.tf
 │   └── modules/
 │       ├── s3/                       # Bucket, versioning, encryption, lifecycle rules
-│       ├── iam/                      # Glue, Step Functions, EventBridge, GitHub Actions roles
+│       ├── iam/                      # Glue, Step Functions, EventBridge roles
 │       ├── glue/                     # Glue jobs, crawler, Data Catalog database
 │       ├── eventbridge/              # S3 event → _READY trigger → Step Functions
 │       ├── step_functions/           # State machine with sequential ETL flow
@@ -144,8 +147,9 @@ ingested_at           TIMESTAMP
 │   ├── test_orders.py
 │   └── test_order_items.py
 ├── scripts/
-│   ├── upload_raw_data.py            # Upload good data + drop _READY marker
-│   ├── upload_bad_data.py            # Upload intentionally bad data for rejection testing
+│   ├── generate_data.py              # Generate synthetic good or bad data to /tmp/
+│   ├── upload_raw_data.py            # Generate + upload clean data locally + drop _READY
+│   ├── upload_bad_data.py            # Generate + upload bad data locally + drop _READY
 │   └── package_glue.py              # Package common/ into common.zip for CI
 ├── .github/
 │   └── workflows/
@@ -241,17 +245,39 @@ This uploads all 3 data files then drops `raw/_READY` as the final signal. **One
 
 **Destroy Infrastructure** (`destroy.yml`)
 - Type `DESTROY` to confirm
-- Empties the S3 bucket, deletes the Athena workgroup, then runs `terraform destroy`
+- Empties the S3 bucket, deletes the Athena workgroup, runs `terraform destroy`
+- Automatically re-applies the bootstrap module after destroy so CI can authenticate on the very next push — no manual steps needed
 
 **Upload Data & Trigger Pipeline** (`upload-data.yml`)
-- Choose `good` to upload clean data
-- Choose `bad` to upload data with deliberate errors (null PKs, invalid timestamps, referential integrity violations) — validates the rejection logic
+- Choose `good` — generates 1,000 products, 500 orders, ~2,500 order items synthetically and uploads them
+- Choose `bad` — generates the same datasets with deliberate errors injected, uploads them
+- Both options upload `raw/_READY` as the final step to trigger exactly one pipeline execution
+
+---
+
+## Data Generation
+
+Both good and bad data are **generated synthetically** — no local data files are needed. The CI runner generates data from scratch using `scripts/generate_data.py`:
+
+```bash
+python scripts/generate_data.py --type good  # clean records, seed=42
+python scripts/generate_data.py --type bad   # same + deliberate errors, seed=99
+```
+
+Locally you can also run the upload scripts directly:
+
+```bash
+python scripts/upload_raw_data.py --bucket <bucket-name>   # good data
+python scripts/upload_bad_data.py  --bucket <bucket-name>  # bad data
+```
+
+Both generate data, upload all files, then drop `raw/_READY` to fire the pipeline.
 
 ---
 
 ## Bad Data Test Cases
 
-The `upload_bad_data.py` script injects:
+The bad data generator injects:
 
 | Dataset | Bad Records | Rejection Reason |
 |---|---|---|
@@ -273,35 +299,37 @@ All AWS resources are managed by Terraform in `terraform/modules/`:
 | Module | Resources |
 |---|---|
 | `s3` | Bucket, versioning, encryption, lifecycle (archived → S3-IA → Glacier) |
-| `iam` | Glue role, Step Functions role, EventBridge role, GitHub Actions OIDC role |
+| `iam` | Glue role, Step Functions role, EventBridge role |
+| `bootstrap` | GitHub Actions OIDC provider + role (separate state, never destroyed) |
 | `glue` | 4 Glue jobs, 1 crawler, Glue Data Catalog database |
 | `eventbridge` | S3 notification, EventBridge rule watching `_READY`, rule → Step Functions |
 | `step_functions` | State machine (sequential), CloudWatch log group, X-Ray tracing |
 | `sns` | Alert topic + email subscription |
 | `athena` | Workgroup (engine v3), 4 named queries pre-loaded |
 
-### Bootstrap (first time only)
+### Bootstrap (first time on a new AWS account only)
 
-The GitHub Actions OIDC provider and role must exist before CI can authenticate. Run once locally:
+The OIDC provider and GitHub Actions role live in a **separate Terraform state** (`terraform/bootstrap/`) so they survive a full infrastructure destroy. Run once locally:
 
 ```bash
-# 1. Create OIDC provider
-aws iam create-open-id-connect-provider \
-  --url https://token.actions.githubusercontent.com \
-  --client-id-list sts.amazonaws.com \
-  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
-
-# 2. Create GitHub Actions role
-aws iam create-role \
-  --role-name ecommerce-lakehouse-dev-github-actions-role \
-  --assume-role-policy-document file://bootstrap/trust-policy.json
-
-aws iam attach-role-policy \
-  --role-name ecommerce-lakehouse-dev-github-actions-role \
-  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+cd terraform/bootstrap
+terraform init
+terraform apply
 ```
 
-After bootstrap, all subsequent deployments are handled by CI.
+After that, CI handles everything — including automatically re-applying bootstrap after each destroy. You never need to run this again.
+
+### Destroy & Rebuild Flow
+
+```
+Run Destroy workflow
+    ↓
+terraform destroy  (removes all 51 resources)
+    ↓
+terraform apply bootstrap  (OIDC + role re-created instantly)
+    ↓
+Push to main  (CI authenticates → rebuilds everything from scratch)
+```
 
 ### GitHub Secrets Required
 
