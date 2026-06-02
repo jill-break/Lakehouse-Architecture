@@ -75,7 +75,7 @@ resource "aws_glue_job" "products" {
   })
 
   execution_property {
-    max_concurrent_runs = 1
+    max_concurrent_runs = 3
   }
 
   depends_on = [aws_s3_object.glue_products_script, aws_s3_object.glue_utils]
@@ -107,7 +107,7 @@ resource "aws_glue_job" "orders" {
   })
 
   execution_property {
-    max_concurrent_runs = 1
+    max_concurrent_runs = 3
   }
 
   depends_on = [aws_s3_object.glue_orders_script, aws_s3_object.glue_utils]
@@ -140,7 +140,7 @@ resource "aws_glue_job" "order_items" {
   })
 
   execution_property {
-    max_concurrent_runs = 1
+    max_concurrent_runs = 3
   }
 
   depends_on = [aws_s3_object.glue_order_items_script, aws_s3_object.glue_utils]
