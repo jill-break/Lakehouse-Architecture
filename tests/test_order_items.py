@@ -1,40 +1,52 @@
 """Unit tests for order_items ETL validation and deduplication logic."""
 
-import pytest
 from pyspark.sql import Row
 from pyspark.sql.types import (
-    StructType, StructField,
-    LongType, IntegerType, TimestampType, DateType,
+    StructType,
+    StructField,
+    LongType,
+    IntegerType,
+    TimestampType,
+    DateType,
 )
 from datetime import date, datetime
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "glue_jobs"))
 
 from common.utils import drop_null_pk, drop_null_cols, deduplicate
 
-
-SCHEMA = StructType([
-    StructField("id",                    LongType(),      True),
-    StructField("order_id",              LongType(),      True),
-    StructField("user_id",               LongType(),      True),
-    StructField("days_since_prior_order", IntegerType(),  True),
-    StructField("product_id",            LongType(),      True),
-    StructField("add_to_cart_order",     IntegerType(),   True),
-    StructField("reordered",             IntegerType(),   True),
-    StructField("order_timestamp",       TimestampType(), True),
-    StructField("date",                  DateType(),      True),
-])
+SCHEMA = StructType(
+    [
+        StructField("id", LongType(), True),
+        StructField("order_id", LongType(), True),
+        StructField("user_id", LongType(), True),
+        StructField("days_since_prior_order", IntegerType(), True),
+        StructField("product_id", LongType(), True),
+        StructField("add_to_cart_order", IntegerType(), True),
+        StructField("reordered", IntegerType(), True),
+        StructField("order_timestamp", TimestampType(), True),
+        StructField("date", DateType(), True),
+    ]
+)
 
 TS = datetime(2025, 4, 1, 11, 27, 0)
-D  = date(2025, 4, 1)
+D = date(2025, 4, 1)
 
 
 def row(**kwargs):
     defaults = dict(
-        id=1, order_id=10000, user_id=1990, days_since_prior_order=10,
-        product_id=988, add_to_cart_order=1, reordered=0,
-        order_timestamp=TS, date=D,
+        id=1,
+        order_id=10000,
+        user_id=1990,
+        days_since_prior_order=10,
+        product_id=988,
+        add_to_cart_order=1,
+        reordered=0,
+        order_timestamp=TS,
+        date=D,
     )
     defaults.update(kwargs)
     return Row(**defaults)

@@ -35,15 +35,18 @@ from common.utils import (
 # ---------------------------------------------------------------------------
 # Bootstrap
 # ---------------------------------------------------------------------------
-args = getResolvedOptions(sys.argv, [
-    "JOB_NAME",
-    "S3_BUCKET",
-    "RAW_PREFIX",
-    "DWH_PREFIX",
-    "ARCHIVED_PREFIX",
-    "REJECTED_PREFIX",
-    "ORDERS_DWH_PREFIX",
-])
+args = getResolvedOptions(
+    sys.argv,
+    [
+        "JOB_NAME",
+        "S3_BUCKET",
+        "RAW_PREFIX",
+        "DWH_PREFIX",
+        "ARCHIVED_PREFIX",
+        "REJECTED_PREFIX",
+        "ORDERS_DWH_PREFIX",
+    ],
+)
 
 sc = SparkContext()
 glue_ctx = GlueContext(sc)
@@ -51,8 +54,6 @@ spark = glue_ctx.spark_session
 job = Job(glue_ctx)
 job.init(args["JOB_NAME"], args)
 
-spark.conf.set("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-spark.conf.set("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
 
 BUCKET = args["S3_BUCKET"]
 RAW_PATH = f"s3://{BUCKET}/{args['RAW_PREFIX']}"
@@ -84,9 +85,15 @@ if not raw_keys:
 
 dfs = []
 for key in raw_keys:
-    resp = s3.get_object(Bucket=BUCKET, Key=key, ExpectedBucketOwner=args.get("AWS_ACCOUNT_ID", ""))
+    resp = s3.get_object(
+        Bucket=BUCKET, Key=key, ExpectedBucketOwner=args.get("AWS_ACCOUNT_ID", "")
+    )
     body = resp["Body"].read()
-    pdf = pd.read_excel(io.BytesIO(body), engine="openpyxl") if key.endswith(".xlsx") else pd.read_csv(io.BytesIO(body))
+    pdf = (
+        pd.read_excel(io.BytesIO(body), engine="openpyxl")
+        if key.endswith(".xlsx")
+        else pd.read_csv(io.BytesIO(body))
+    )
     dfs.append(spark.createDataFrame(pdf))
 
 raw_df = dfs[0]
@@ -95,11 +102,12 @@ for d in dfs[1:]:
 
 # Cast columns
 raw_df = (
-    raw_df
-    .withColumn("id", F.col("id").cast(LongType()))
+    raw_df.withColumn("id", F.col("id").cast(LongType()))
     .withColumn("order_id", F.col("order_id").cast(LongType()))
     .withColumn("user_id", F.col("user_id").cast(LongType()))
-    .withColumn("days_since_prior_order", F.col("days_since_prior_order").cast(IntegerType()))
+    .withColumn(
+        "days_since_prior_order", F.col("days_since_prior_order").cast(IntegerType())
+    )
     .withColumn("product_id", F.col("product_id").cast(LongType()))
     .withColumn("add_to_cart_order", F.col("add_to_cart_order").cast(IntegerType()))
     .withColumn("reordered", F.col("reordered").cast(IntegerType()))
@@ -128,16 +136,27 @@ rejected = rejected.union(ts_rejected) if rejected is not None else ts_rejected
 # 3. Referential integrity: order_id must exist in orders Delta table
 # ---------------------------------------------------------------------------
 if DeltaTable.isDeltaTable(spark, ORDERS_DWH_PATH):
-    orders_ids = spark.read.format("delta").load(ORDERS_DWH_PATH).select("order_id").distinct()
+    orders_ids = (
+        spark.read.format("delta").load(ORDERS_DWH_PATH).select("order_id").distinct()
+    )
     orphan_mask = ~F.col("order_id").isin([r.order_id for r in orders_ids.collect()])
     orphan_rejected = valid_df.filter(orphan_mask).withColumn(
-        "rejection_reason", F.lit("order_id not found in orders table (referential integrity)")
+        "rejection_reason",
+        F.lit("order_id not found in orders table (referential integrity)"),
     )
     valid_df = valid_df.filter(~orphan_mask)
-    rejected = rejected.union(orphan_rejected) if rejected is not None else orphan_rejected
-    print(f"[order_items] Referential integrity check complete. Orphan rows: {orphan_rejected.count()}")
+    rejected = (
+        rejected.union(orphan_rejected) if rejected is not None else orphan_rejected
+    )
+    print(
+        f"[order_items] Referential integrity check complete."
+        f" Orphan rows: {orphan_rejected.count()}"
+    )
 else:
-    print("[order_items] WARNING: orders Delta table not found — skipping referential integrity check")
+    print(
+        "[order_items] WARNING: orders Delta table not found"
+        " — skipping referential integrity check"
+    )
 
 # ---------------------------------------------------------------------------
 # 4. Deduplicate on id, keep latest by order_timestamp

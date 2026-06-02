@@ -10,12 +10,14 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import StructType
 from delta.tables import DeltaTable
 
-
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
 
-def drop_null_pk(df: DataFrame, pk_col: str, rejected: DataFrame, reason: str) -> tuple[DataFrame, DataFrame]:
+
+def drop_null_pk(
+    df: DataFrame, pk_col: str, rejected: DataFrame, reason: str
+) -> tuple[DataFrame, DataFrame]:
     """Split df into valid (non-null pk) and rejected rows."""
     null_mask = F.col(pk_col).isNull()
     new_rejected = df.filter(null_mask).withColumn("rejection_reason", F.lit(reason))
@@ -23,7 +25,9 @@ def drop_null_pk(df: DataFrame, pk_col: str, rejected: DataFrame, reason: str) -
     return valid, rejected.union(new_rejected) if rejected is not None else new_rejected
 
 
-def drop_null_cols(df: DataFrame, cols: list[str], rejected: DataFrame) -> tuple[DataFrame, DataFrame]:
+def drop_null_cols(
+    df: DataFrame, cols: list[str], rejected: DataFrame
+) -> tuple[DataFrame, DataFrame]:
     """Reject rows where any of the given columns are null."""
     mask = F.lit(False)
     for c in cols:
@@ -34,7 +38,9 @@ def drop_null_cols(df: DataFrame, cols: list[str], rejected: DataFrame) -> tuple
     return valid, rejected.union(new_rejected) if rejected is not None else new_rejected
 
 
-def validate_timestamps(df: DataFrame, ts_col: str, rejected: DataFrame) -> tuple[DataFrame, DataFrame]:
+def validate_timestamps(
+    df: DataFrame, ts_col: str, rejected: DataFrame
+) -> tuple[DataFrame, DataFrame]:
     """Reject rows where the timestamp column cannot be parsed."""
     parsed = df.withColumn("_ts_check", F.to_timestamp(F.col(ts_col)))
     invalid_mask = F.col("_ts_check").isNull()
@@ -51,6 +57,7 @@ def validate_timestamps(df: DataFrame, ts_col: str, rejected: DataFrame) -> tupl
 def deduplicate(df: DataFrame, pk_col: str, order_col: str = None) -> DataFrame:
     """Deduplicate on pk_col, keeping the row with the latest order_col value."""
     from pyspark.sql.window import Window
+
     if order_col:
         w = Window.partitionBy(pk_col).orderBy(F.col(order_col).desc())
         return (
@@ -64,6 +71,7 @@ def deduplicate(df: DataFrame, pk_col: str, order_col: str = None) -> DataFrame:
 # ---------------------------------------------------------------------------
 # Delta Lake helpers
 # ---------------------------------------------------------------------------
+
 
 def upsert_to_delta(
     spark: SparkSession,
@@ -103,7 +111,8 @@ def upsert_to_delta_partitioned(
         delta_table = DeltaTable.forPath(spark, delta_path)
         delta_table.alias("target").merge(
             source_df.alias("source"),
-            f"target.{partition_col} = source.{partition_col} AND target.{merge_key} = source.{merge_key}",
+            f"target.{partition_col} = source.{partition_col}"
+            f" AND target.{merge_key} = source.{merge_key}",
         ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
     else:
         (
@@ -119,8 +128,9 @@ def upsert_to_delta_partitioned(
 # Rejected records writer
 # ---------------------------------------------------------------------------
 
+
 def write_rejected(df: DataFrame, rejected_path: str, job_name: str) -> None:
-    """Write rejected records to the rejected zone as Parquet with a timestamp prefix."""
+    """Write rejected records to the rejected zone as Parquet with a timestamp prefix."""  # noqa: E501
     if df is None or df.rdd.isEmpty():
         return
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
@@ -132,6 +142,7 @@ def write_rejected(df: DataFrame, rejected_path: str, job_name: str) -> None:
 # ---------------------------------------------------------------------------
 # S3 archive helper
 # ---------------------------------------------------------------------------
+
 
 def archive_s3_object(bucket: str, source_key: str, archived_prefix: str) -> None:
     """
@@ -155,6 +166,7 @@ def archive_s3_object(bucket: str, source_key: str, archived_prefix: str) -> Non
 # ---------------------------------------------------------------------------
 # Glue job args helper
 # ---------------------------------------------------------------------------
+
 
 def get_job_args(required_keys: list[str]) -> dict:
     """Parse Glue job arguments and validate that all required keys are present."""

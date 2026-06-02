@@ -10,8 +10,7 @@ from pyspark.sql import SparkSession
 @pytest.fixture(scope="session")
 def spark():
     session = (
-        SparkSession.builder
-        .master("local[2]")
+        SparkSession.builder.master("local[2]")
         .appName("lakehouse-tests")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config(

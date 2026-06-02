@@ -7,9 +7,9 @@ resource "aws_glue_catalog_database" "lakehouse" {
 # ─── Upload ETL scripts to S3 ────────────────────────────────────────────────
 resource "aws_s3_object" "glue_utils" {
   bucket = var.bucket_name
-  key    = "glue-scripts/common/utils.py"
-  source = "${path.root}/../glue_jobs/common/utils.py"
-  etag   = filemd5("${path.root}/../glue_jobs/common/utils.py")
+  key    = "glue-scripts/common.zip"
+  source = "${path.root}/../glue_jobs/dist/common.zip"
+  etag   = filemd5("${path.root}/../glue_jobs/dist/common.zip")
 }
 
 resource "aws_s3_object" "glue_products_script" {
@@ -44,9 +44,8 @@ locals {
     "--enable-metrics"                   = "true"
     "--enable-auto-scaling"              = "true"
     "--additional-python-modules"        = "boto3,pandas,openpyxl"
-    "--conf"                             = "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
     "--datalake-formats"                 = "delta"
-    "--extra-py-files"                   = "s3://${var.bucket_name}/glue-scripts/common/utils.py"
+    "--extra-py-files"                   = "s3://${var.bucket_name}/glue-scripts/common.zip"
   }
 }
 

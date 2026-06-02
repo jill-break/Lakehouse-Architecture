@@ -4,7 +4,8 @@ Reads orders Excel file from S3 raw zone, validates, deduplicates,
 upserts into a Delta Lake table partitioned by date, and archives the source.
 
 Job parameters:
-  --S3_BUCKET, --RAW_PREFIX, --DWH_PREFIX, --ARCHIVED_PREFIX, --REJECTED_PREFIX, --JOB_NAME
+  --S3_BUCKET, --RAW_PREFIX, --DWH_PREFIX, --ARCHIVED_PREFIX,
+  --REJECTED_PREFIX, --JOB_NAME
 """
 
 import io
@@ -32,23 +33,23 @@ from common.utils import (
 # ---------------------------------------------------------------------------
 # Bootstrap
 # ---------------------------------------------------------------------------
-args = getResolvedOptions(sys.argv, [
-    "JOB_NAME",
-    "S3_BUCKET",
-    "RAW_PREFIX",
-    "DWH_PREFIX",
-    "ARCHIVED_PREFIX",
-    "REJECTED_PREFIX",
-])
+args = getResolvedOptions(
+    sys.argv,
+    [
+        "JOB_NAME",
+        "S3_BUCKET",
+        "RAW_PREFIX",
+        "DWH_PREFIX",
+        "ARCHIVED_PREFIX",
+        "REJECTED_PREFIX",
+    ],
+)
 
 sc = SparkContext()
 glue_ctx = GlueContext(sc)
 spark = glue_ctx.spark_session
 job = Job(glue_ctx)
 job.init(args["JOB_NAME"], args)
-
-spark.conf.set("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-spark.conf.set("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
 
 BUCKET = args["S3_BUCKET"]
 RAW_PATH = f"s3://{BUCKET}/{args['RAW_PREFIX']}"
@@ -80,7 +81,9 @@ if not raw_keys:
 
 dfs = []
 for key in raw_keys:
-    resp = s3.get_object(Bucket=BUCKET, Key=key, ExpectedBucketOwner=args.get("AWS_ACCOUNT_ID", ""))
+    resp = s3.get_object(
+        Bucket=BUCKET, Key=key, ExpectedBucketOwner=args.get("AWS_ACCOUNT_ID", "")
+    )
     body = resp["Body"].read()
     if key.endswith(".xlsx"):
         pdf = pd.read_excel(io.BytesIO(body), engine="openpyxl")
@@ -94,8 +97,7 @@ for d in dfs[1:]:
 
 # Cast columns to correct types
 raw_df = (
-    raw_df
-    .withColumn("order_num", F.col("order_num").cast(IntegerType()))
+    raw_df.withColumn("order_num", F.col("order_num").cast(IntegerType()))
     .withColumn("order_id", F.col("order_id").cast(LongType()))
     .withColumn("user_id", F.col("user_id").cast(LongType()))
     .withColumn("order_timestamp", F.to_timestamp(F.col("order_timestamp")))

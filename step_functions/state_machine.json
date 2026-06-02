@@ -211,7 +211,7 @@
         "QueryString": "SELECT COUNT(*) AS product_count FROM lakehouse.products; SELECT COUNT(*) AS order_count FROM lakehouse.orders; SELECT COUNT(*) AS item_count FROM lakehouse.order_items;",
         "WorkGroup": "primary",
         "ResultConfiguration": {
-          "OutputLocation.$": "States.Format('s3://{}/athena-results/', $.S3_BUCKET)"
+          "OutputLocation.$": "States.Format('s3://{}/athena-results/step-functions/', $.S3_BUCKET)"
         }
       },
       "Catch": [

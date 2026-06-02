@@ -22,8 +22,10 @@ from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
-    StructType, StructField,
-    IntegerType, StringType,
+    StructType,
+    StructField,
+    IntegerType,
+    StringType,
 )
 
 from common.utils import (
@@ -38,14 +40,17 @@ from common.utils import (
 # ---------------------------------------------------------------------------
 # Bootstrap Glue / Spark context
 # ---------------------------------------------------------------------------
-args = getResolvedOptions(sys.argv, [
-    "JOB_NAME",
-    "S3_BUCKET",
-    "RAW_PREFIX",
-    "DWH_PREFIX",
-    "ARCHIVED_PREFIX",
-    "REJECTED_PREFIX",
-])
+args = getResolvedOptions(
+    sys.argv,
+    [
+        "JOB_NAME",
+        "S3_BUCKET",
+        "RAW_PREFIX",
+        "DWH_PREFIX",
+        "ARCHIVED_PREFIX",
+        "REJECTED_PREFIX",
+    ],
+)
 
 sc = SparkContext()
 glue_ctx = GlueContext(sc)
@@ -53,33 +58,26 @@ spark = glue_ctx.spark_session
 job = Job(glue_ctx)
 job.init(args["JOB_NAME"], args)
 
-# Delta Lake config
-spark.conf.set("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-spark.conf.set("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-
 BUCKET = args["S3_BUCKET"]
 RAW_PATH = f"s3://{BUCKET}/{args['RAW_PREFIX']}"
 DWH_PATH = f"s3://{BUCKET}/{args['DWH_PREFIX']}"
 ARCHIVED_PREFIX = args["ARCHIVED_PREFIX"]
 REJECTED_PATH = f"s3://{BUCKET}/{args['REJECTED_PREFIX']}"
 
-PRODUCTS_SCHEMA = StructType([
-    StructField("product_id", IntegerType(), nullable=False),
-    StructField("department_id", IntegerType(), nullable=True),
-    StructField("department", StringType(), nullable=True),
-    StructField("product_name", StringType(), nullable=True),
-])
+PRODUCTS_SCHEMA = StructType(
+    [
+        StructField("product_id", IntegerType(), nullable=False),
+        StructField("department_id", IntegerType(), nullable=True),
+        StructField("department", StringType(), nullable=True),
+        StructField("product_name", StringType(), nullable=True),
+    ]
+)
 
 # ---------------------------------------------------------------------------
 # 1. Read raw CSV
 # ---------------------------------------------------------------------------
 print(f"[products] Reading raw data from {RAW_PATH}")
-raw_df = (
-    spark.read
-    .option("header", "true")
-    .schema(PRODUCTS_SCHEMA)
-    .csv(RAW_PATH)
-)
+raw_df = spark.read.option("header", "true").schema(PRODUCTS_SCHEMA).csv(RAW_PATH)
 print(f"[products] Raw row count: {raw_df.count()}")
 
 # ---------------------------------------------------------------------------

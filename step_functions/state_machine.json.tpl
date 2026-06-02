@@ -106,7 +106,7 @@
       "Parameters": {
         "QueryString": "SELECT (SELECT COUNT(*) FROM products) AS products, (SELECT COUNT(*) FROM orders) AS orders, (SELECT COUNT(*) FROM order_items) AS order_items",
         "WorkGroup": "primary",
-        "ResultConfiguration": { "OutputLocation": "s3://${bucket_name}/athena-results/" }
+        "ResultConfiguration": { "OutputLocation": "s3://${bucket_name}/athena-results/step-functions/" }
       },
       "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "PipelineFailed", "ResultPath": "$.error" }],
       "Next": "PipelineSuccess"
