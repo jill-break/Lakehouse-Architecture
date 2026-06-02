@@ -67,8 +67,9 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
       "Parameters": {
-        "QueryString": "SELECT (SELECT COUNT(*) FROM products) AS products, (SELECT COUNT(*) FROM orders) AS orders, (SELECT COUNT(*) FROM order_items) AS order_items",
+        "QueryString": "SELECT (SELECT COUNT(*) FROM ecommerce_lakehouse_dev.products) AS products, (SELECT COUNT(*) FROM ecommerce_lakehouse_dev.orders) AS orders, (SELECT COUNT(*) FROM ecommerce_lakehouse_dev.order_items) AS order_items",
         "WorkGroup": "ecommerce-lakehouse-dev",
+        "QueryExecutionContext": { "Database": "ecommerce_lakehouse_dev", "Catalog": "AwsDataCatalog" },
         "ResultConfiguration": { "OutputLocation": "s3://${bucket_name}/athena-results/step-functions/" }
       },
       "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "JobFailed", "ResultPath": "$.error" }],
