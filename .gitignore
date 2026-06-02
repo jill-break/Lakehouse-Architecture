@@ -17,3 +17,4 @@ terraform/*.tfplan
 .pytest_cache/
 .coverage
 htmlcov/
+Data
