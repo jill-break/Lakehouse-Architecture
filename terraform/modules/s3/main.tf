@@ -93,8 +93,6 @@ locals {
     "rejected/products/",
     "rejected/orders/",
     "rejected/order_items/",
-    "glue-scripts/",
-    "glue-scripts/common/",
     "athena-results/",
     "temp/",
   ]
