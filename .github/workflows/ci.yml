@@ -136,3 +136,4 @@ jobs:
           aws s3 cp glue_jobs/glue_order_items.py        s3://$BUCKET/glue-scripts/glue_order_items.py
           aws s3 cp glue_jobs/glue_generate_manifests.py s3://$BUCKET/glue-scripts/glue_generate_manifests.py
           echo "All scripts uploaded to s3://$BUCKET/glue-scripts/"
+
