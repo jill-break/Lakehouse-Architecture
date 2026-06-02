@@ -180,6 +180,32 @@ resource "aws_glue_crawler" "lakehouse" {
   })
 }
 
+# ─── Manifest generation Glue job ────────────────────────────────────────────
+resource "aws_glue_job" "generate_manifests" {
+  name              = "${var.project_name}-${var.environment}-generate-manifests"
+  role_arn          = var.glue_role_arn
+  glue_version      = local.glue_version
+  worker_type       = var.glue_worker_type
+  number_of_workers = var.glue_num_workers
+  timeout           = 30
+  max_retries       = 0
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${var.bucket_name}/glue-scripts/glue_generate_manifests.py"
+    python_version  = local.python_version
+  }
+
+  default_arguments = merge(local.common_default_args, {
+    "--S3_BUCKET" = var.bucket_name
+    "--TempDir"   = "s3://${var.bucket_name}/temp/"
+  })
+
+  execution_property {
+    max_concurrent_runs = 1
+  }
+}
+
 # ─── CloudWatch Log Group for Glue jobs ──────────────────────────────────────
 resource "aws_cloudwatch_log_group" "glue" {
   name              = "/aws-glue/jobs/${var.project_name}-${var.environment}"

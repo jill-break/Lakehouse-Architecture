@@ -83,7 +83,8 @@ module "step_functions" {
   glue_products_job_name  = module.glue.products_job_name
   glue_orders_job_name    = module.glue.orders_job_name
   glue_order_items_job_name = module.glue.order_items_job_name
-  glue_crawler_name       = module.glue.crawler_name
+  glue_crawler_name                = module.glue.crawler_name
+  glue_generate_manifests_job_name = module.glue.generate_manifests_job_name
   depends_on              = [module.glue, module.iam, module.sns]
 }
 

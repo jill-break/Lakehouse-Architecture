@@ -30,6 +30,16 @@
       "Retry": [{ "ErrorEquals": ["Glue.ConcurrentRunsExceededException"], "IntervalSeconds": 60, "MaxAttempts": 3, "BackoffRate": 2 }],
       "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "JobFailed", "ResultPath": "$.error" }],
       "TimeoutSeconds": 3600,
+      "Next": "GenerateManifests"
+    },
+
+    "GenerateManifests": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": { "JobName": "${glue_generate_manifests_job_name}" },
+      "Retry": [{ "ErrorEquals": ["Glue.ConcurrentRunsExceededException"], "IntervalSeconds": 60, "MaxAttempts": 3, "BackoffRate": 2 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "JobFailed", "ResultPath": "$.error" }],
+      "TimeoutSeconds": 1800,
       "Next": "RunGlueCrawler"
     },
 
