@@ -147,10 +147,17 @@ def write_rejected(df: DataFrame, rejected_path: str, job_name: str) -> None:
 def archive_s3_object(bucket: str, source_key: str, archived_prefix: str) -> None:
     """
     Copy a raw S3 object to the archived prefix then delete the original.
+    Skips folder placeholder objects (keys ending with '/').
     source_key example: raw/orders/orders_apr_2025.csv
     """
+    if source_key.endswith("/"):
+        return
+
     s3 = boto3.client("s3")
     filename = source_key.split("/")[-1]
+    if not filename:
+        return
+
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
     dest_key = f"{archived_prefix}/{ts}_{filename}"
 
@@ -160,7 +167,7 @@ def archive_s3_object(bucket: str, source_key: str, archived_prefix: str) -> Non
         Key=dest_key,
     )
     s3.delete_object(Bucket=bucket, Key=source_key)
-    print(f"Archived s3://{bucket}/{source_key} → s3://{bucket}/{dest_key}")
+    print(f"Archived s3://{bucket}/{source_key} -> s3://{bucket}/{dest_key}")
 
 
 # ---------------------------------------------------------------------------

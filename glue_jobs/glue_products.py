@@ -125,7 +125,8 @@ paginator = s3_client.get_paginator("list_objects_v2")
 pages = paginator.paginate(Bucket=BUCKET, Prefix=args["RAW_PREFIX"])
 for page in pages:
     for obj in page.get("Contents", []):
-        archive_s3_object(BUCKET, obj["Key"], ARCHIVED_PREFIX)
+        if not obj["Key"].endswith("/") and obj["Size"] > 0:
+            archive_s3_object(BUCKET, obj["Key"], ARCHIVED_PREFIX)
 
 job.commit()
 print("[products] Job complete")

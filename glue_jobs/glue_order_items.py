@@ -79,15 +79,12 @@ raw_keys = [
 ]
 
 if not raw_keys:
-    print("[order_items] No raw files found — exiting.")
+    print("[order_items] No raw files found — nothing to do.")
     job.commit()
-    sys.exit(0)
 
 dfs = []
 for key in raw_keys:
-    resp = s3.get_object(
-        Bucket=BUCKET, Key=key, ExpectedBucketOwner=args.get("AWS_ACCOUNT_ID", "")
-    )
+    resp = s3.get_object(Bucket=BUCKET, Key=key)
     body = resp["Body"].read()
     pdf = (
         pd.read_excel(io.BytesIO(body), engine="openpyxl")
