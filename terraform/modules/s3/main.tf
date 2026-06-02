@@ -77,30 +77,3 @@ resource "aws_s3_bucket_lifecycle_configuration" "lakehouse" {
   }
 }
 
-# Zone placeholder objects (S3 doesn't have real folders, but these make
-# the structure visible in the console)
-locals {
-  zone_prefixes = [
-    "raw/products/",
-    "raw/orders/",
-    "raw/order_items/",
-    "lakehouse-dwh/products/",
-    "lakehouse-dwh/orders/",
-    "lakehouse-dwh/order_items/",
-    "archived/products/",
-    "archived/orders/",
-    "archived/order_items/",
-    "rejected/products/",
-    "rejected/orders/",
-    "rejected/order_items/",
-    "athena-results/",
-    "temp/",
-  ]
-}
-
-resource "aws_s3_object" "zone_placeholders" {
-  for_each = toset(local.zone_prefixes)
-  bucket   = aws_s3_bucket.lakehouse.id
-  key      = each.value
-  content  = ""
-}
