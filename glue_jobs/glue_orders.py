@@ -77,6 +77,9 @@ raw_keys = [
 if not raw_keys:
     print("[orders] No raw files found — nothing to do.")
     job.commit()
+    import os
+
+    os._exit(0)
 
 dfs = []
 for key in raw_keys:
