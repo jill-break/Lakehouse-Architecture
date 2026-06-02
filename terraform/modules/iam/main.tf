@@ -38,11 +38,10 @@ resource "aws_iam_role_policy" "github_actions" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "TerraformS3State"
+        Sid    = "TerraformS3"
         Effect = "Allow"
         Action = [
-          "s3:GetObject", "s3:PutObject", "s3:ListBucket",
-          "s3:DeleteObject", "s3:GetBucketVersioning",
+          "s3:*",
         ]
         Resource = [
           "arn:aws:s3:::${var.bucket_name}",
@@ -91,13 +90,9 @@ resource "aws_iam_role_policy" "github_actions" {
         Resource = "*"
       },
       {
-        Sid    = "TerraformSNS"
-        Effect = "Allow"
-        Action = [
-          "sns:CreateTopic", "sns:DeleteTopic", "sns:GetTopicAttributes",
-          "sns:SetTopicAttributes", "sns:Subscribe", "sns:Unsubscribe",
-          "sns:TagResource", "sns:UntagResource", "sns:ListTagsForResource",
-        ]
+        Sid      = "TerraformSNS"
+        Effect   = "Allow"
+        Action   = ["sns:*"]
         Resource = "*"
       },
       {
