@@ -1,0 +1,9 @@
+variable "project_name"              { type = string }
+variable "environment"               { type = string }
+variable "step_functions_role_arn"   { type = string }
+variable "bucket_name"               { type = string }
+variable "sns_topic_arn"             { type = string }
+variable "glue_products_job_name"    { type = string }
+variable "glue_orders_job_name"      { type = string }
+variable "glue_order_items_job_name" { type = string }
+variable "glue_crawler_name"         { type = string }
