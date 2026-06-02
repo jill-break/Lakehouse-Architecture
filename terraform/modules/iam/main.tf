@@ -41,11 +41,14 @@ resource "aws_iam_role_policy" "github_actions" {
         Sid    = "TerraformS3State"
         Effect = "Allow"
         Action = [
-          "s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"
+          "s3:GetObject", "s3:PutObject", "s3:ListBucket",
+          "s3:DeleteObject", "s3:GetBucketVersioning",
         ]
         Resource = [
           "arn:aws:s3:::${var.bucket_name}",
           "arn:aws:s3:::${var.bucket_name}/*",
+          "arn:aws:s3:::ecommerce-lakehouse-tfstate-${var.account_id}",
+          "arn:aws:s3:::ecommerce-lakehouse-tfstate-${var.account_id}/*",
         ]
       },
       {
@@ -93,7 +96,7 @@ resource "aws_iam_role_policy" "github_actions" {
         Action = [
           "sns:CreateTopic", "sns:DeleteTopic", "sns:GetTopicAttributes",
           "sns:SetTopicAttributes", "sns:Subscribe", "sns:Unsubscribe",
-          "sns:TagResource", "sns:UntagResource",
+          "sns:TagResource", "sns:UntagResource", "sns:ListTagsForResource",
         ]
         Resource = "*"
       },

@@ -8,12 +8,11 @@ terraform {
     }
   }
 
-  # Uncomment to store state remotely in S3 (recommended for teams)
-  # backend "s3" {
-  #   bucket = "your-tfstate-bucket"
-  #   key    = "lakehouse/terraform.tfstate"
-  #   region = var.aws_region
-  # }
+  backend "s3" {
+    bucket = "ecommerce-lakehouse-tfstate-352505432441"
+    key    = "lakehouse/terraform.tfstate"
+    region = "us-east-1"
+  }
 }
 
 provider "aws" {
