@@ -29,7 +29,7 @@ def upload(bucket: str, region: str) -> None:
             print(f"SKIP  {filename} — not found at {local_path}")
             continue
 
-        print(f"Uploading {local_path} → s3://{bucket}/{s3_key}")
+        print(f"Uploading {local_path} -> s3://{bucket}/{s3_key}")
         s3.upload_file(str(local_path), bucket, s3_key)
         print(f"  OK")
 
