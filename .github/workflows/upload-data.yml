@@ -71,7 +71,7 @@ jobs:
         if: github.event.inputs.data_type == 'good'
         run: |
           BUCKET="${{ steps.bucket.outputs.name }}"
-          aws s3api put-object --bucket $BUCKET --key raw/_READY --body /dev/null
+          touch /tmp/_READY && aws s3 cp /tmp/_READY s3://$BUCKET/raw/_READY
           echo "Pipeline triggered."
 
       # ── Bad data ──────────────────────────────────────────────────────────
