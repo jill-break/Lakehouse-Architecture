@@ -87,6 +87,16 @@ module "step_functions" {
   depends_on              = [module.glue, module.iam, module.sns]
 }
 
+module "eventbridge" {
+  source            = "./modules/eventbridge"
+  project_name      = var.project_name
+  environment       = var.environment
+  bucket_name       = local.bucket_name
+  state_machine_arn = module.step_functions.state_machine_arn
+  sns_topic_arn     = module.sns.topic_arn
+  depends_on        = [module.s3, module.step_functions]
+}
+
 module "athena" {
   source             = "./modules/athena"
   bucket_name        = local.bucket_name

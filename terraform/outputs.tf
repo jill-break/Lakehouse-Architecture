@@ -35,6 +35,11 @@ output "glue_order_items_job_name" {
   value = module.glue.order_items_job_name
 }
 
+output "eventbridge_rule_name" {
+  description = "EventBridge rule that auto-triggers the pipeline on S3 file upload"
+  value       = module.eventbridge.rule_name
+}
+
 output "github_actions_role_arn" {
   description = "ARN to paste into the AWS_ROLE_ARN GitHub secret"
   value       = module.iam.github_actions_role_arn
