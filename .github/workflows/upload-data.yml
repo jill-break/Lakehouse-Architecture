@@ -37,7 +37,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: "us-east-1"
 
-      - name: Setup Terraform (to get bucket name)
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "~1.5"
@@ -46,20 +46,50 @@ jobs:
         id: bucket
         working-directory: terraform
         env:
-          TF_VAR_aws_region:   "us-east-1"
-          TF_VAR_environment:  "dev"
-          TF_VAR_alert_email:  ${{ secrets.ALERT_EMAIL }}
-          TF_VAR_github_repo:  "jill-break/Lakehouse-Architecture"
+          TF_VAR_aws_region:  "us-east-1"
+          TF_VAR_environment: "dev"
+          TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+          TF_VAR_github_repo: "jill-break/Lakehouse-Architecture"
         run: |
-          terraform init
+          terraform init -reconfigure
           echo "name=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
 
-      - name: Upload good data
+      # ── Good data ─────────────────────────────────────────────────────────
+      - name: "[Good] Generate clean data"
+        if: github.event.inputs.data_type == 'good'
+        run: python scripts/generate_data.py --type good
+
+      - name: "[Good] Upload data files to S3"
         if: github.event.inputs.data_type == 'good'
         run: |
-          python scripts/upload_raw_data.py --bucket ${{ steps.bucket.outputs.name }}
+          BUCKET="${{ steps.bucket.outputs.name }}"
+          aws s3 cp /tmp/products.csv     s3://$BUCKET/raw/products/products.csv
+          aws s3 cp /tmp/orders.xlsx      s3://$BUCKET/raw/orders/orders_apr_2025.xlsx
+          aws s3 cp /tmp/order_items.xlsx s3://$BUCKET/raw/order_items/order_items_apr_2025.xlsx
 
-      - name: Upload bad data
+      - name: "[Good] Signal pipeline (_READY)"
+        if: github.event.inputs.data_type == 'good'
+        run: |
+          BUCKET="${{ steps.bucket.outputs.name }}"
+          aws s3api put-object --bucket $BUCKET --key raw/_READY --body /dev/null
+          echo "Pipeline triggered."
+
+      # ── Bad data ──────────────────────────────────────────────────────────
+      - name: "[Bad] Generate bad data"
+        if: github.event.inputs.data_type == 'bad'
+        run: python scripts/generate_data.py --type bad
+
+      - name: "[Bad] Upload bad data files to S3"
         if: github.event.inputs.data_type == 'bad'
         run: |
-          python scripts/upload_bad_data.py --bucket ${{ steps.bucket.outputs.name }}
+          BUCKET="${{ steps.bucket.outputs.name }}"
+          aws s3 cp /tmp/products.csv     s3://$BUCKET/raw/products/products_bad.csv
+          aws s3 cp /tmp/orders.xlsx      s3://$BUCKET/raw/orders/orders_bad.xlsx
+          aws s3 cp /tmp/order_items.xlsx s3://$BUCKET/raw/order_items/order_items_bad.xlsx
+
+      - name: "[Bad] Signal pipeline (_READY)"
+        if: github.event.inputs.data_type == 'bad'
+        run: |
+          BUCKET="${{ steps.bucket.outputs.name }}"
+          aws s3api put-object --bucket $BUCKET --key raw/_READY --body /dev/null
+          echo "Pipeline triggered. Check s3://$BUCKET/rejected/ after it completes."
