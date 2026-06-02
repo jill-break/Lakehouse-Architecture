@@ -6,16 +6,15 @@ Usage:
 """
 
 import argparse
-import os
+
 import boto3
 from pathlib import Path
-
 
 DATA_DIR = Path(__file__).parent.parent / "Data"
 
 UPLOAD_MAP = {
-    "products.csv":             "raw/products/products.csv",
-    "orders_apr_2025.xlsx":     "raw/orders/orders_apr_2025.xlsx",
+    "products.csv": "raw/products/products.csv",
+    "orders_apr_2025.xlsx": "raw/orders/orders_apr_2025.xlsx",
     "order_items_apr_2025.xlsx": "raw/order_items/order_items_apr_2025.xlsx",
 }
 
@@ -31,7 +30,7 @@ def upload(bucket: str, region: str) -> None:
 
         print(f"Uploading {local_path} -> s3://{bucket}/{s3_key}")
         s3.upload_file(str(local_path), bucket, s3_key)
-        print(f"  OK")
+        print("  OK")
 
     print("\nAll files uploaded.")
 
