@@ -1,73 +1,36 @@
 {
-  "Comment": "Ecommerce Lakehouse ETL Pipeline",
-  "StartAt": "RunETLJobs",
+  "Comment": "Ecommerce Lakehouse ETL Pipeline — sequential execution: products → orders → order_items → crawler → athena",
+  "StartAt": "GlueProducts",
   "States": {
-    "RunETLJobs": {
-      "Type": "Parallel",
-      "Branches": [
-        {
-          "StartAt": "GlueProducts",
-          "States": {
-            "GlueProducts": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::glue:startJobRun.sync",
-              "Parameters": { "JobName": "${glue_products_job_name}" },
-              "Retry": [{ "ErrorEquals": ["Glue.ConcurrentRunsExceededException"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2 }],
-              "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "GlueProductsFailed", "ResultPath": "$.error" }],
-              "TimeoutSeconds": 3600,
-              "End": true
-            },
-            "GlueProductsFailed": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::sns:publish",
-              "Parameters": { "TopicArn": "${sns_topic_arn}", "Message": "Glue job ${glue_products_job_name} FAILED", "Subject": "Lakehouse Alert: Products Job Failed" },
-              "End": true
-            }
-          }
-        },
-        {
-          "StartAt": "GlueOrders",
-          "States": {
-            "GlueOrders": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::glue:startJobRun.sync",
-              "Parameters": { "JobName": "${glue_orders_job_name}" },
-              "Retry": [{ "ErrorEquals": ["Glue.ConcurrentRunsExceededException"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2 }],
-              "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "GlueOrdersFailed", "ResultPath": "$.error" }],
-              "TimeoutSeconds": 3600,
-              "End": true
-            },
-            "GlueOrdersFailed": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::sns:publish",
-              "Parameters": { "TopicArn": "${sns_topic_arn}", "Message": "Glue job ${glue_orders_job_name} FAILED", "Subject": "Lakehouse Alert: Orders Job Failed" },
-              "End": true
-            }
-          }
-        },
-        {
-          "StartAt": "GlueOrderItems",
-          "States": {
-            "GlueOrderItems": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::glue:startJobRun.sync",
-              "Parameters": { "JobName": "${glue_order_items_job_name}" },
-              "Retry": [{ "ErrorEquals": ["Glue.ConcurrentRunsExceededException"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2 }],
-              "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "GlueOrderItemsFailed", "ResultPath": "$.error" }],
-              "TimeoutSeconds": 3600,
-              "End": true
-            },
-            "GlueOrderItemsFailed": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::sns:publish",
-              "Parameters": { "TopicArn": "${sns_topic_arn}", "Message": "Glue job ${glue_order_items_job_name} FAILED", "Subject": "Lakehouse Alert: Order Items Job Failed" },
-              "End": true
-            }
-          }
-        }
-      ],
-      "Next": "RunGlueCrawler",
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "PipelineFailed", "ResultPath": "$.error" }]
+
+    "GlueProducts": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": { "JobName": "${glue_products_job_name}" },
+      "Retry": [{ "ErrorEquals": ["Glue.ConcurrentRunsExceededException"], "IntervalSeconds": 60, "MaxAttempts": 3, "BackoffRate": 2 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "JobFailed", "ResultPath": "$.error" }],
+      "TimeoutSeconds": 3600,
+      "Next": "GlueOrders"
+    },
+
+    "GlueOrders": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": { "JobName": "${glue_orders_job_name}" },
+      "Retry": [{ "ErrorEquals": ["Glue.ConcurrentRunsExceededException"], "IntervalSeconds": 60, "MaxAttempts": 3, "BackoffRate": 2 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "JobFailed", "ResultPath": "$.error" }],
+      "TimeoutSeconds": 3600,
+      "Next": "GlueOrderItems"
+    },
+
+    "GlueOrderItems": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": { "JobName": "${glue_order_items_job_name}" },
+      "Retry": [{ "ErrorEquals": ["Glue.ConcurrentRunsExceededException"], "IntervalSeconds": 60, "MaxAttempts": 3, "BackoffRate": 2 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "JobFailed", "ResultPath": "$.error" }],
+      "TimeoutSeconds": 3600,
+      "Next": "RunGlueCrawler"
     },
 
     "RunGlueCrawler": {
@@ -75,9 +38,8 @@
       "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
       "Parameters": { "Name": "${glue_crawler_name}" },
       "Catch": [
-        { "ErrorEquals": ["Glue.CrawlerRunningException"], "Next": "WaitForCrawler", "ResultPath": "$.crawlerError", "Comment": "Crawler already running — just wait for it" },
-        { "ErrorEquals": ["Glue.CrawlerNotRunningException"], "Next": "PipelineSuccess", "ResultPath": "$.crawlerError" },
-        { "ErrorEquals": ["States.ALL"], "Next": "PipelineFailed", "ResultPath": "$.error" }
+        { "ErrorEquals": ["Glue.CrawlerRunningException"], "Next": "WaitForCrawler", "ResultPath": "$.crawlerError" },
+        { "ErrorEquals": ["States.ALL"], "Next": "JobFailed", "ResultPath": "$.error" }
       ],
       "Next": "WaitForCrawler"
     },
@@ -109,19 +71,19 @@
         "WorkGroup": "ecommerce-lakehouse-dev",
         "ResultConfiguration": { "OutputLocation": "s3://${bucket_name}/athena-results/step-functions/" }
       },
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "PipelineFailed", "ResultPath": "$.error" }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "JobFailed", "ResultPath": "$.error" }],
       "Next": "PipelineSuccess"
     },
 
     "PipelineSuccess": { "Type": "Succeed" },
 
-    "PipelineFailed": {
+    "JobFailed": {
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "${sns_topic_arn}",
         "Message.$": "States.Format('Lakehouse pipeline FAILED. Error: {}', $.error)",
-        "Subject": "Lakehouse Alert: Critical Pipeline Failure"
+        "Subject": "Lakehouse Alert: Pipeline Failure"
       },
       "Next": "FailState"
     },
