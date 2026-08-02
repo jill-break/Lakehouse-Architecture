@@ -11,7 +11,7 @@ terraform {
   backend "s3" {
     bucket = "ecommerce-lakehouse-tfstate-352505432441"
     key    = "bootstrap/terraform.tfstate"
-    region = "us-east-1"
+    region = "eu-west-1"
 
     use_lockfile = true
   }

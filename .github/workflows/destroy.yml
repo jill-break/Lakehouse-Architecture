@@ -27,7 +27,7 @@ jobs:
       contents: read
 
     env:
-      TF_VAR_aws_region: "us-east-1"
+      TF_VAR_aws_region: "eu-west-1"
       TF_VAR_environment: "dev"
       TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
 
@@ -38,7 +38,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: "us-east-1"
+          aws-region: "eu-west-1"
 
       - uses: hashicorp/setup-terraform@v3
         with:

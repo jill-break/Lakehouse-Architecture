@@ -55,7 +55,7 @@ if __name__ == "__main__":
         description="Upload synthetic data to the raw zone"
     )
     parser.add_argument("--bucket", required=True, help="S3 bucket name")
-    parser.add_argument("--region", default="us-east-1", help="AWS region")
+    parser.add_argument("--region", default="eu-west-1", help="AWS region")
     parser.add_argument("--type", default="good", choices=["good", "bad"])
     args = parser.parse_args()
 
