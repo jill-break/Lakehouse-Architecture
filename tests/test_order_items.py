@@ -11,12 +11,7 @@ from pyspark.sql.types import (
 )
 from datetime import date, datetime
 
-import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "glue_jobs"))
-
-from common.utils import drop_null_pk, drop_null_cols, deduplicate
+from common.utils import deduplicate, drop_null_cols, drop_null_pk
 
 SCHEMA = StructType(
     [
