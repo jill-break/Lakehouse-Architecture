@@ -16,7 +16,7 @@ terraform {
   backend "s3" {
     bucket = "ecommerce-lakehouse-tfstate-352505432441"
     key    = "lakehouse/terraform.tfstate"
-    region = "us-east-1"
+    region = "eu-west-1"
 
     # Without a lock, two applies against the same state (two pushes to main in
     # quick succession, or a local apply racing CI) can interleave writes and

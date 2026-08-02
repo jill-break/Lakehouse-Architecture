@@ -4,7 +4,7 @@
 # The GitHub repository is configured in terraform/bootstrap/, not here — see
 # terraform/bootstrap/terraform.tfvars.example.
 
-aws_region       = "us-east-1"
+aws_region       = "eu-west-1"
 project_name     = "ecommerce-lakehouse"
 environment      = "dev"
 alert_email      = "your-email@example.com"
