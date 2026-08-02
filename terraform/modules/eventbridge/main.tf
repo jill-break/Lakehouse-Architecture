@@ -56,10 +56,14 @@ resource "aws_cloudwatch_event_target" "step_functions" {
   arn      = var.state_machine_arn
   role_arn = aws_iam_role.eventbridge.arn
 
+  # The state machine reads neither of the values this used to inject — the
+  # bucket, topic and job names are all templated into the definition at apply
+  # time. Passing the triggering key through is genuinely useful for tracing.
   input_transformer {
     input_paths = {
       bucket = "$.detail.bucket.name"
+      key    = "$.detail.object.key"
     }
-    input_template = "{\"S3_BUCKET\": \"<bucket>\", \"SNS_TOPIC_ARN\": \"${var.sns_topic_arn}\"}"
+    input_template = "{\"trigger\": {\"bucket\": \"<bucket>\", \"key\": \"<key>\"}}"
   }
 }

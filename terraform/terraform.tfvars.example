@@ -1,5 +1,8 @@
 # Copy this file to terraform.tfvars and fill in your values.
 # terraform.tfvars is git-ignored — never commit real values.
+#
+# The GitHub repository is configured in terraform/bootstrap/, not here — see
+# terraform/bootstrap/terraform.tfvars.example.
 
 aws_region       = "us-east-1"
 project_name     = "ecommerce-lakehouse"
@@ -7,4 +10,9 @@ environment      = "dev"
 alert_email      = "your-email@example.com"
 glue_worker_type = "G.1X"
 glue_num_workers = 2
-github_repo      = "owner/repo-name"
+
+# Fail an ETL job when more than this share of its input rows is rejected.
+max_rejection_rate = 0.05
+
+# Delta VACUUM retention (168h = Delta's 7-day safety floor).
+vacuum_retention_hours = 168
