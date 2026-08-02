@@ -16,16 +16,16 @@ flowchart TD
     subgraph UPLOAD["① Data Ingestion"]
         direction LR
         GEN["Generate Data\nscripts/generate_data.py\nSynthetic good or bad records"]
-        SCRIPT["Upload Script\nscripts/upload_raw_data.py\nor upload_bad_data.py"]
+        SCRIPT["Upload Script\nscripts/upload_data.py\n--type good | bad"]
         GEN --> SCRIPT
     end
 
     %% ── S3 Raw Zone ──────────────────────────────────────────────────────────
-    subgraph RAW["② Amazon S3 — Raw Zone\ns3://ecommerce-lakehouse-dev-352505432441/raw/"]
+    subgraph RAW["② Amazon S3 — Raw Zone (CSV only)\ns3://ecommerce-lakehouse-dev-352505432441/raw/"]
         direction LR
         P["raw/products/\nproducts.csv"]
-        O["raw/orders/\norders.xlsx"]
-        OI["raw/order_items/\norder_items.xlsx"]
+        O["raw/orders/\norders.csv"]
+        OI["raw/order_items/\norder_items.csv"]
         RDY["raw/_READY\nUpload trigger marker"]
     end
 
@@ -35,45 +35,48 @@ flowchart TD
     end
 
     %% ── Orchestration ────────────────────────────────────────────────────────
-    subgraph SFN["④ AWS Step Functions\nState Machine: ecommerce-lakehouse-dev-pipeline\nSequential execution · CloudWatch logs · X-Ray tracing"]
+    subgraph SFN["④ AWS Step Functions\nState Machine: ecommerce-lakehouse-dev-pipeline\nTimeoutSeconds 5400 · CloudWatch logs · X-Ray tracing"]
         direction TB
-        S1["State: GlueProducts\nstartJobRun.sync"]
-        S2["State: GlueOrders\nstartJobRun.sync"]
+        S1["Parallel: GlueProducts\nstartJobRun.sync"]
+        S2["Parallel: GlueOrders\nstartJobRun.sync"]
         S3["State: GlueOrderItems\nstartJobRun.sync"]
-        S4["State: GenerateManifests\nstartJobRun.sync"]
+        S4["State: DeltaMaintenance\nstartJobRun.sync"]
         S5["State: RunGlueCrawler\nstartCrawler"]
-        S6["State: WaitForCrawler\nChoice: READY?"]
-        S7["State: AthenaValidation\nstartQueryExecution.sync"]
+        S6["Poll: WaitForCrawler → CheckCrawlerStatus\nChoice on LastCrawl.Status\nAttempt cap 40 × 30s"]
+        S7["State: AthenaValidation\nstartQueryExecution.sync\n+ getQueryResults"]
+        S7b["Choice: IsWarehousePopulated\nFails on 0 rows"]
         S8["State: PipelineSuccess\nSucceed"]
-        SFAIL["State: JobFailed\nSNS Publish → FailState"]
+        SFAIL["State: JobFailed\nStates.JsonToString($.error)\nSNS Publish → FailState"]
 
-        S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
+        S1 & S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S7b --> S8
         S1 & S2 & S3 & S4 & S5 & S7 -->|Catch: States.ALL| SFAIL
+        S6 -->|FAILED / CANCELLED / timeout| SFAIL
+        S7b -->|0 rows| SFAIL
     end
 
     %% ── Glue ETL ─────────────────────────────────────────────────────────────
-    subgraph GLUE["⑤ AWS Glue 4.0 — PySpark ETL\nDelta Lake · --datalake-formats delta · G.1X workers"]
+    subgraph GLUE["⑤ AWS Glue 4.0 — PySpark ETL\nDelta Lake · --datalake-formats delta · G.1X workers\nShared runner: common/etl.py"]
         direction LR
-        subgraph JP["Job: ecommerce-lakehouse-dev-products\nReads CSV · Validates · Deduplicates · MERGE"]
-            JP1["✓ Null product_id check\n✓ Null product_name check\n✓ Dedup on product_id\n✓ MERGE into Delta table\n✓ Archive raw file"]
+        subgraph JP["Job: ecommerce-lakehouse-dev-products\nReads CSV natively · Validates · Deduplicates · MERGE"]
+            JP1["✓ Null product_id check\n✓ Null product_name check\n✓ Dedup on product_id\n✓ MERGE on PK into Delta\n✓ Archive the keys it listed"]
         end
-        subgraph JO["Job: ecommerce-lakehouse-dev-orders\nReads Excel · Validates · Deduplicates · MERGE"]
-            JO1["✓ Null order_id check\n✓ Null user_id check\n✓ Timestamp validation\n✓ Dedup on order_id\n✓ MERGE into Delta table\n✓ Archive raw file"]
+        subgraph JO["Job: ecommerce-lakehouse-dev-orders\nReads CSV natively · Validates · Deduplicates · MERGE"]
+            JO1["✓ Null order_id check\n✓ Null user_id check\n✓ Timestamp validation\n✓ Null partition check\n✓ Dedup on order_id\n✓ MERGE on PK into Delta"]
         end
-        subgraph JOI["Job: ecommerce-lakehouse-dev-order-items\nReads Excel · Validates · Ref Integrity · MERGE"]
-            JOI1["✓ Null id check\n✓ Null order_id check\n✓ Timestamp validation\n✓ order_id exists in orders?\n✓ Dedup on id\n✓ MERGE into Delta table\n✓ Archive raw file"]
+        subgraph JOI["Job: ecommerce-lakehouse-dev-order-items\nReads CSV natively · Validates · Both FKs · MERGE"]
+            JOI1["✓ Null id check\n✓ Null order_id / user_id\n✓ Timestamp validation\n✓ order_id → orders (anti-join)\n✓ product_id → products (anti-join)\n✓ Dedup on id · MERGE on PK"]
         end
-        subgraph JM["Job: ecommerce-lakehouse-dev-generate-manifests\nGenerates Delta symlink manifests for Athena"]
-            JM1["delta_table.generate\nsymlink_format_manifest\nfor all 3 tables"]
+        subgraph JM["Job: ecommerce-lakehouse-dev-maintenance\nCompacts the small files each load leaves behind"]
+            JM1["OPTIMIZE + Z-ORDER\nproducts: product_id\norders / order_items: order_id\nVACUUM 168h"]
         end
     end
 
     %% ── S3 DWH Zone ──────────────────────────────────────────────────────────
-    subgraph DWH["⑥ Amazon S3 — Lakehouse DWH Zone\ns3://.../lakehouse-dwh/\nDelta Lake · ACID · Partitioned"]
+    subgraph DWH["⑥ Amazon S3 — Lakehouse DWH Zone\ns3://.../lakehouse-dwh/\nDelta Lake · ACID"]
         direction LR
-        DT1["lakehouse-dwh/products/\nDelta Table\nPartition: department\n_delta_log/ · _symlink_format_manifest/"]
-        DT2["lakehouse-dwh/orders/\nDelta Table\nPartition: date\n_delta_log/ · _symlink_format_manifest/"]
-        DT3["lakehouse-dwh/order_items/\nDelta Table\nPartition: date\n_delta_log/ · _symlink_format_manifest/"]
+        DT1["lakehouse-dwh/products/\nDelta Table\nUnpartitioned · Z-ORDER product_id\n_delta_log/"]
+        DT2["lakehouse-dwh/orders/\nDelta Table\nPartition: date\n_delta_log/"]
+        DT3["lakehouse-dwh/order_items/\nDelta Table\nPartition: date\n_delta_log/"]
     end
 
     %% ── S3 Supporting Zones ───────────────────────────────────────────────────
@@ -84,15 +87,15 @@ flowchart TD
     end
 
     %% ── Glue Crawler ─────────────────────────────────────────────────────────
-    subgraph CRAWLER["⑦ AWS Glue Crawler\necommerce-lakehouse-dev-crawler\nCrawls Delta tables via symlink manifests"]
+    subgraph CRAWLER["⑦ AWS Glue Crawler\necommerce-lakehouse-dev-crawler\ndelta_target · write_manifest = false"]
         direction LR
-        CRAW["Detects schema + partitions\nUpdates table definitions\nMerges new columns"]
+        CRAW["Registers native Delta tables\nDetects schema + partitions\nMerges new columns"]
     end
 
     %% ── Glue Data Catalog ────────────────────────────────────────────────────
     subgraph CATALOG["⑧ AWS Glue Data Catalog\nDatabase: ecommerce_lakehouse_dev"]
         direction LR
-        CT1["Table: products\ndepartment partition"]
+        CT1["Table: products\nunpartitioned"]
         CT2["Table: orders\ndate partition"]
         CT3["Table: order_items\ndate partition"]
     end
@@ -100,41 +103,45 @@ flowchart TD
     %% ── Athena ───────────────────────────────────────────────────────────────
     subgraph ATHENA["⑨ Amazon Athena\nWorkgroup: ecommerce-lakehouse-dev\nEngine: Athena v3 · Results: s3://.../athena-results/"]
         direction LR
-        AQ1["Validation Query\nSELECT COUNT from all 3 tables"]
+        AQ1["Validation Query\nTotal rows across all 3 tables"]
         AQ2["Named Query:\nRevenue by Department"]
         AQ3["Named Query:\nOrder Count by Date"]
         AQ4["Named Query:\nRow Count Validation"]
     end
 
     %% ── Alerting ─────────────────────────────────────────────────────────────
-    subgraph ALERTING["⑩ Amazon SNS\nTopic: ecommerce-lakehouse-dev-pipeline-alerts"]
-        SNS["Email Subscription\ncourage.dei@amalitechtraining.org\nFires on any pipeline failure"]
+    subgraph ALERTING["⑩ Observability"]
+        SNS["Amazon SNS (KMS encrypted)\nEmail on any pipeline failure"]
+        METRICS["CloudWatch Lakehouse/ETL\nRowsIngested · RowsRejected · RejectionRate\nAlarm per dataset"]
+        METRICS --> SNS
     end
 
     %% ── IAM ──────────────────────────────────────────────────────────────────
     subgraph IAM["IAM Roles"]
         direction LR
-        GROLE["ecommerce-lakehouse-dev-glue-role\nAWSGlueServiceRole + S3 + Catalog"]
+        GROLE["ecommerce-lakehouse-dev-glue-role\nAWSGlueServiceRole + S3 + Catalog + metrics"]
         SROLE["ecommerce-lakehouse-dev-sfn-role\nGlue + SNS + Athena + S3 + CloudWatch"]
         EROLE["ecommerce-lakehouse-dev-eventbridge-role\nstates:StartExecution"]
-        GHROLE["ecommerce-lakehouse-dev-github-actions-role\nOIDC · AdministratorAccess\nbootstrap/ state — never destroyed"]
+        GHROLE["ecommerce-lakehouse-github-actions-deploy\nOIDC · main branch only · least privilege\n+ permissions boundary"]
+        GHPLAN["ecommerce-lakehouse-github-actions-plan\nOIDC · pull requests · ReadOnlyAccess"]
     end
 
     %% ── CI/CD ────────────────────────────────────────────────────────────────
     subgraph CICD["GitHub Actions CI/CD"]
         direction LR
         CIPUSH["Push to main\nor workflow_dispatch"]
-        CILINT["Lint + Test\nflake8 · black · pytest"]
-        CITF["terraform apply\nAll 7 modules"]
-        CISCRIPTS["Upload Glue Scripts\npackage_glue.py + aws s3 cp"]
-        CIPUSH --> CILINT --> CITF --> CISCRIPTS
+        CISCAN["gitleaks\nhistory + working tree"]
+        CILINT["Lint + Test\nflake8 · black · pytest 70%"]
+        CITFCHK["fmt · validate · tflint · tfsec"]
+        CITF["terraform apply\nAll 7 modules + Glue scripts"]
+        CIPUSH --> CISCAN --> CILINT --> CITFCHK --> CITF
     end
 
     %% ── Connections ──────────────────────────────────────────────────────────
-    SCRIPT -->|"1. Upload CSV/Excel"| P & O & OI
+    SCRIPT -->|"1. Upload CSV files"| P & O & OI
     SCRIPT -->|"2. Upload last"| RDY
     RDY -->|"S3 Object Created event"| RULE
-    RULE -->|"StartExecution\n{S3_BUCKET, SNS_TOPIC_ARN}"| SFN
+    RULE -->|"StartExecution\n{trigger: {bucket, key}}"| SFN
 
     S1 -->|"runs"| JP
     S2 -->|"runs"| JO
@@ -147,12 +154,13 @@ flowchart TD
 
     JP & JO & JOI -->|"archive"| ARC
     JP & JO & JOI -->|"rejected rows"| REJ
+    JP & JO & JOI -->|"row counts"| METRICS
 
-    JM -->|"symlink manifests"| DT1 & DT2 & DT3
+    JM -->|"compact + vacuum"| DT1 & DT2 & DT3
     S5 -->|"crawl"| CRAWLER
     CRAWLER -->|"register schema + partitions"| CATALOG
     CATALOG -->|"table metadata"| ATHENA
-    ATHENA -->|"reads via symlink manifests"| DT1 & DT2 & DT3
+    ATHENA -->|"reads native Delta"| DT1 & DT2 & DT3
 
     SFAIL -->|"Publish message"| SNS
 
@@ -165,12 +173,12 @@ flowchart TD
     class UPLOAD,GEN,SCRIPT upload
     class RAW,P,O,OI,RDY,DWH,DT1,DT2,DT3,ARC,REJ,SUPPORT storage
     class EVENT,RULE trigger
-    class SFN,S1,S2,S3,S4,S5,S6,S7,S8,SFAIL orchestration
+    class SFN,S1,S2,S3,S4,S5,S6,S7,S7b,S8,SFAIL orchestration
     class GLUE,JP,JO,JOI,JM,JP1,JO1,JOI1,JM1 processing
     class CATALOG,CT1,CT2,CT3,CRAWLER,CRAW catalog
     class ATHENA,AQ1,AQ2,AQ3,AQ4 analytics
-    class ALERTING,SNS alert
-    class CICD,CIPUSH,CILINT,CITF,CISCRIPTS,IAM,GROLE,SROLE,EROLE,GHROLE iac
+    class ALERTING,SNS,METRICS alert
+    class CICD,CIPUSH,CISCAN,CILINT,CITFCHK,CITF,IAM,GROLE,SROLE,EROLE,GHROLE,GHPLAN iac
 ```
 
 ---
@@ -179,13 +187,13 @@ flowchart TD
 
 | Step | AWS Service | What Happens |
 |---|---|---|
-| ① | Local scripts | Synthetic data generated, uploaded to S3 raw zone |
+| ① | Local scripts | Synthetic data generated as CSV, uploaded to the S3 raw zone |
 | ② | Amazon S3 | `raw/_READY` uploaded as the final trigger signal |
-| ③ | Amazon EventBridge | Detects `_READY` → fires one Step Functions execution |
-| ④ | AWS Step Functions | Orchestrates 6 sequential states with failure handling |
-| ⑤ | AWS Glue + PySpark | Validates, deduplicates, merges data into Delta tables |
-| ⑥ | Amazon S3 + Delta Lake | ACID Delta tables partitioned by department/date |
-| ⑦ | AWS Glue Crawler | Crawls Delta tables, registers schema and partitions |
+| ③ | Amazon EventBridge | Detects `_READY` → fires exactly one Step Functions execution |
+| ④ | AWS Step Functions | Products ∥ Orders → Order Items → maintenance → crawler → validation, with retries, catches and timeouts |
+| ⑤ | AWS Glue + PySpark | Reads CSV across executors, validates, deduplicates, merges into Delta |
+| ⑥ | Amazon S3 + Delta Lake | ACID Delta tables; facts partitioned by date, the dimension Z-ORDERed |
+| ⑦ | AWS Glue Crawler | Registers native Delta tables; the pipeline checks the crawl actually succeeded |
 | ⑧ | AWS Glue Data Catalog | Metadata store — tables visible to Athena |
-| ⑨ | Amazon Athena | SQL analytics on Delta tables via symlink manifests |
-| ⑩ | Amazon SNS | Email alert on any pipeline failure |
+| ⑨ | Amazon Athena | SQL analytics on native Delta tables (engine v3, no manifests) |
+| ⑩ | SNS + CloudWatch | Email on failure; row-count and rejection-rate metrics with an alarm |

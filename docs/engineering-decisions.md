@@ -17,6 +17,7 @@ This document records the architectural decisions made during the build of the e
 9. [Bootstrap Problem & Solution](#9-bootstrap-problem--solution)
 10. [What Currently Works](#10-what-currently-works)
 11. [Known Limitations](#11-known-limitations)
+12. [Second Pass: Correctness, Security and Test Coverage](#12-second-pass-correctness-security-and-test-coverage)
 
 ---
 
@@ -299,20 +300,20 @@ The destroy workflow now:
 - Glue scripts automatically packaged and uploaded to S3 after apply
 
 ### Manual Workflows
-- **Destroy** — empties S3, deletes Athena workgroup, destroys all infra, re-applies bootstrap
+- **Destroy** — empties S3, deletes Athena workgroup, destroys all infra (bootstrap is a separate state and is left alone)
 - **Upload good data** — generates 1,000 products / 500 orders / ~2,500 order items synthetically, uploads, fires pipeline
 - **Upload bad data** — same with deliberate violations injected, fires pipeline, rejected records land in `s3://.../rejected/`
 
 ### ETL Pipeline
-- Products, Orders, Order Items Glue jobs run sequentially
-- Schema validation, null PK checks, timestamp validation, referential integrity on order_items
-- Deduplication using window functions (latest by timestamp wins)
-- Delta Lake MERGE (upsert) — idempotent, reruns are safe
+- Products and Orders run concurrently; Order Items follows both (see §12)
+- Schema validation, null PK checks, timestamp validation, referential integrity on both of order_items' foreign keys
+- Deduplication using window functions (latest by timestamp, deterministic tiebreak)
+- Delta Lake MERGE (upsert) on the primary key — idempotent, reruns are safe
 - Raw files archived after successful ingestion
 - Rejected records written to `rejected/` zone with `rejection_reason` column
-- Symlink manifests generated for Athena compatibility
-- Glue crawler updates Data Catalog after each run
-- Athena validation query runs as the final pipeline step
+- Maintenance job compacts, Z-ORDERs and vacuums the tables after each load
+- Glue crawler updates Data Catalog after each run, and its outcome is checked
+- Athena validation query runs as the final pipeline step and asserts a non-zero count
 
 ### Querying
 - All three Delta tables queryable in Athena
@@ -325,9 +326,89 @@ The destroy workflow now:
 
 | Limitation | Detail |
 |---|---|
-| Athena partition discovery | `MSCK REPAIR TABLE` must be run once manually after the first pipeline run to load partitions. Subsequent runs handled by the crawler. |
-| Multiple `_READY` uploads | If `_READY` is uploaded twice in quick succession, two pipeline executions start. The second will find empty `raw/` folders (archived by first run) and exit cleanly, but it still fires. |
-| Bootstrap still needs one local run | On a completely new AWS account, `terraform apply` must be run once in `terraform/bootstrap/` locally before CI can function. |
-| Glue job cold start | Each Glue job takes ~60-90 seconds to start a Spark context before doing any actual work. The full pipeline takes 10-15 minutes end to end as a result. |
+| Multiple `_READY` uploads | If `_READY` is uploaded twice in quick succession, two pipeline executions start. The second finds empty `raw/` folders and now genuinely exits cleanly (see §12) — but it still fires. |
+| Bootstrap still needs one local run | On a completely new AWS account, `terraform apply` must be run once in `terraform/bootstrap/` locally before CI can function. This is now deliberate: CI has no permission to modify its own roles. |
+| Glue job cold start | Each Glue job takes ~60-90 seconds to start a Spark context before doing any actual work. Running Products and Orders concurrently removed one of those; the full pipeline is still cold-start dominated. |
 | No incremental processing | Every pipeline run processes all files in `raw/`. There is no watermark or checkpoint — the idempotent Delta MERGE handles reruns safely but doesn't skip already-processed records. |
-| Athena table re-registration | After a full destroy and rebuild, Athena tables must be re-registered (crawler handles this on first pipeline run, but the first Athena query after a rebuild will fail until the crawler runs). |
+| Athena table re-registration | After a full destroy and rebuild, the first Athena query fails until the crawler has run once. |
+| Manifests unverified | The maintenance job can still emit symlink manifests, but they are off by default on the assumption that Athena engine v3 reads the crawler's native Delta tables. That assumption has not been re-tested against a live catalog. |
+
+---
+
+## 12. Second Pass: Correctness, Security and Test Coverage
+
+A senior review of the first cut found five critical and seven high-severity defects. Two of them corrupted data silently, which is the failure mode that matters most here — the pipeline stays green while the numbers drift. This section records what was wrong and what changed.
+
+### Decision: the partition column does not belong in the merge predicate
+
+**Original design:** `MERGE ON target.date = source.date AND target.order_id = source.order_id`, on the reasoning that naming the partition column lets Delta prune files.
+
+**What failed:** two things, both silent.
+
+`NULL = NULL` is UNKNOWN in SQL, not TRUE. `date` is derived with `to_date()`, which yields null for anything unparseable, and nothing rejected null partition values. So a row with a null date could never match its own target row: `whenNotMatchedInsertAll()` fired on *every* run and the table grew without bound — worst for exactly the dirty records the pipeline exists to catch.
+
+Separately, when a record legitimately changes partition — an order date corrected, a product reclassified — the target row lives in a different partition, the predicate can't see it, and the merge inserts a second row with the same primary key. Every aggregate then over-counts.
+
+**Fix:** merge on the primary key alone, reject null partition values before the merge as defence in depth, and cover both cases with regression tests (`test_null_partition_value_does_not_duplicate`, `test_partition_value_change_updates_rather_than_duplicates`). Pruning is given up deliberately: a correct scan beats a fast wrong answer.
+
+### Decision: read CSV with Spark instead of Excel with pandas
+
+**Original design:** orders and order_items were `.xlsx`, read with `pandas.read_excel` on the driver and handed to `spark.createDataFrame`.
+
+**What failed:** nothing, at 2,768 rows — which is why it survived. But every byte went through the driver's heap and was parsed single-threaded by openpyxl (roughly 10× the file size in RAM), so `glue_num_workers` had no effect on the read at all. It was a single-node job wearing a Spark costume, and it would OOM the driver at real scale.
+
+The union across files was positional (`DataFrame.union`), so two files with the same columns in a different order would have loaded `user_id` values into `order_id` — both integers, so nothing would have complained.
+
+**Fix:** the generator writes CSV (the brief specifies CSV, and this project controls its own input format), and the jobs read it with `spark.read.csv` across all keys in one call. `enforceSchema=false` makes Spark check each file's header against the declared schema and refuse a mismatched one, which is a stronger guarantee than `unionByName` — a reordered or renamed column now fails the run and names the file.
+
+### Decision: list once, read that list, archive that list
+
+**What failed:** the products job read with a prefix glob and then archived whatever a *later* `list_objects_v2` call returned. A file uploaded between those two moments was copied to `archived/` and deleted from `raw/` without ever being in the DataFrame that got merged. Silent data loss, discoverable only by scanning the archive.
+
+The same job also had no empty-prefix guard, so the second run of an unchanged pipeline — products archives its own sources — raised `AnalysisException`, caught to `JobFailed` and paged on-call. §10 previously claimed this case "exits cleanly"; it did not.
+
+**Fix:** `list_raw_keys()` in `common/utils.py`, called once per run. The same key list feeds the read and the archive, and an empty list logs and returns instead of raising. Both behaviours are covered by moto tests.
+
+### Decision: referential integrity via anti-join, and both foreign keys
+
+**What failed:** the check collected every distinct `order_id` in the warehouse into a Python list on the driver and embedded it in the plan as a literal `IN (...)`. Fine at 500 orders; a multi-hundred-MB driver allocation and an uncompilable plan at 10M. And `product_id → products`, documented as a foreign key in the README, was never enforced at all — an item referencing a nonexistent product flowed into the warehouse and then silently vanished from the revenue-by-department join.
+
+**Fix:** `reject_orphans()` uses `left_anti`/`left_semi` joins — nothing touches the driver — and order_items now checks both foreign keys.
+
+### Decision: sequential was over-correction; parallel where the dependencies allow
+
+§5 abandoned the `Parallel` state for two reasons. The first (EventBridge firing one execution per file) was solved by the `_READY` sentinel and no longer applies. The second — order_items reads the orders table — is real, and adding the `product_id` foreign key made it *more* constraining, not less.
+
+**Fix:** Products and Orders run concurrently in a `Parallel` state; Order Items follows both. That keeps every dependency intact and removes one Glue cold start.
+
+### Decision: the failure alert has to actually send
+
+**What failed:** every `Catch` writes to `ResultPath: "$.error"`, so `$.error` is an object. `States.Format` only interpolates strings, numbers and booleans — passing an object raises `States.Runtime`. `JobFailed` had no `Catch` of its own, so the execution aborted there and the SNS publish never happened. The one requirement whose entire purpose is observability didn't work.
+
+**Fix:** `States.JsonToString($.error)` before formatting, plus a `Catch` on the publish itself so a failed alert still reaches the `Fail` state.
+
+The crawler poll had the matching problem: a Glue crawler returns to `State: READY` whether it succeeded or failed, and only `State` was inspected, so a failed crawl handed off to Athena against a stale catalog. The loop also had no iteration cap. Both are fixed, and the state machine has a top-level `TimeoutSeconds`.
+
+### Decision: least privilege, and CI cannot modify CI
+
+**What failed:** the GitHub Actions role had `AdministratorAccess` and a trust policy of `repo:owner/repo:*` — every branch, tag and environment. Anyone who could push a branch had admin over the account. §8 justified this as acceptable for a lab; it is the exact shortcut behind a long list of real breaches, and it would fail any security review.
+
+**Fix:** two roles. A deploy role trusted only from `ref:refs/heads/main`, carrying a policy scoped to project-prefixed resource ARNs, and a read-only plan role for pull requests. Both carry a permissions boundary that caps them regardless of what the inline policy later says, and the deploy policy explicitly denies `iam:*` on the CI roles themselves — CI cannot widen its own trust policy. Bootstrap is applied by a human, and the destroy workflow no longer re-applies it.
+
+The S3 backend also had no lock (`use_lockfile = true` now, on Terraform ≥1.10) and the workflows had no `concurrency` group, so two pushes to `main` could `terraform apply -auto-approve` against the same state simultaneously.
+
+### Decision: fail on bad data instead of quietly merging nothing
+
+Rejected rows were counted and never acted on. A malformed upstream export where every row failed validation produced an empty merge, a successful pipeline, a green Athena check and no alert. Each job now fails when the rejection rate exceeds a configurable ceiling (5% by default), publishes `RowsIngested` / `RowsRejected` / `RejectionRate` to CloudWatch, and there is an alarm on the rate. Logging is structured JSON, so CloudWatch Logs Insights can filter by level and query individual fields.
+
+### Decision: one implementation of the ETL sequence
+
+The list → read → validate → dedup → merge → reject → archive sequence was copy-pasted across three jobs with small variations, and every job executed at import time — `SparkContext()` on line 48 — which is why the test suite could only reach three tiny helpers. The sequence now lives once in `common/etl.py`, driven by a per-dataset `DatasetConfig`; each job file is a config, optional validation hooks and a `main()`. The three data generators collapsed into one, dead code in `utils.py` was deleted, and the stale `state_machine.json` (which had already drifted to a wrong job name and a missing state) is gone — the `.tpl` is the only definition.
+
+Terraform is now the single owner of everything under `glue-scripts/`: it builds `common.zip` with `archive_file` at plan time and uploads every job script, so CI no longer uploads the same objects after apply.
+
+### What the tests cover now
+
+72 tests, 86% line coverage, with a 70% floor enforced in CI. The three merge regressions the review called non-negotiable are there, along with an end-to-end run from CSV on disk through validation to a queried Delta table, moto-backed tests for the S3 listing/archiving race, and coverage of the anti-join foreign keys, the dedup tiebreak, the rejection circuit breaker and the maintenance job.
+
+Two gaps remain honest ones: `run_dataset_etl`'s S3 read path can't be exercised locally without an S3-backed Spark, and the Glue bootstrap blocks are excluded from coverage because they instantiate a `SparkContext` and a Glue `Job` that only exist inside the Glue runtime.
