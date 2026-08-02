@@ -1,3 +1,6 @@
+# tfsec:ignore:aws-s3-enable-bucket-logging Server access logging needs a
+# second bucket whose only consumer would be itself; CloudTrail data events are
+# the better answer if this ever leaves the lab.
 resource "aws_s3_bucket" "lakehouse" {
   bucket        = var.bucket_name
   force_destroy = var.environment != "prod"
@@ -17,6 +20,30 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "lakehouse" {
       sse_algorithm = "AES256"
     }
   }
+}
+
+# Reject any request that did not arrive over TLS.
+resource "aws_s3_bucket_policy" "require_tls" {
+  bucket = aws_s3_bucket.lakehouse.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource = [
+        aws_s3_bucket.lakehouse.arn,
+        "${aws_s3_bucket.lakehouse.arn}/*",
+      ]
+      Condition = {
+        Bool = { "aws:SecureTransport" = "false" }
+      }
+    }]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.lakehouse]
 }
 
 resource "aws_s3_bucket_public_access_block" "lakehouse" {

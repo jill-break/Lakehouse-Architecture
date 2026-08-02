@@ -1,5 +1,10 @@
 resource "aws_sns_topic" "alerts" {
   name = "${var.project_name}-${var.environment}-pipeline-alerts"
+
+  # Alert bodies carry Step Functions error causes, which can quote job
+  # parameters. Encrypt at rest with the AWS-managed SNS key (no cost, no key
+  # policy to maintain).
+  kms_master_key_id = "alias/aws/sns"
 }
 
 resource "aws_sns_topic_subscription" "email" {

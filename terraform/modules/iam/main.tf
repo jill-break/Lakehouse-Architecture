@@ -66,6 +66,20 @@ resource "aws_iam_role_policy" "glue_s3" {
         ]
         Resource = "arn:aws:logs:${var.region}:${var.account_id}:log-group:/aws-glue/*"
       },
+      {
+        # Row-count and rejection-rate metrics published by the ETL jobs.
+        # PutMetricData cannot be scoped to a resource; the namespace condition
+        # is the only available restriction.
+        Sid      = "PublishEtlMetrics"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:PutMetricData"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "Lakehouse/ETL"
+          }
+        }
+      },
     ]
   })
 }
@@ -105,9 +119,9 @@ resource "aws_iam_role_policy" "step_functions" {
         Resource = "*"
       },
       {
-        Sid    = "PublishSNS"
-        Effect = "Allow"
-        Action = ["sns:Publish"]
+        Sid      = "PublishSNS"
+        Effect   = "Allow"
+        Action   = ["sns:Publish"]
         Resource = "arn:aws:sns:${var.region}:${var.account_id}:*"
       },
       {

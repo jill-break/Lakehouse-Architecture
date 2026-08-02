@@ -37,3 +37,18 @@ variable "glue_num_workers" {
   type        = number
   default     = 2
 }
+
+variable "max_rejection_rate" {
+  description = <<-DESC
+    Circuit breaker: an ETL job fails if more than this share of its input rows
+    is rejected, rather than merging nothing and reporting success.
+  DESC
+  type        = number
+  default     = 0.05
+}
+
+variable "vacuum_retention_hours" {
+  description = "Delta VACUUM retention window in hours (168 = Delta's 7-day safety floor)"
+  type        = number
+  default     = 168
+}
