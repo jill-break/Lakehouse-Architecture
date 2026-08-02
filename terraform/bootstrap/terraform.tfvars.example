@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars before the first `terraform apply` in this directory.
+# These values decide WHO may assume the deploy role — get them right.
+
+github_owner = "your-github-username-or-org"
+github_repo  = "Lakehouse-Architecture"
+
+# Only workflow runs on this branch can assume the deploy role. Everything
+# else falls back to the read-only plan role.
+deploy_branch = "main"
+
+project_name = "ecommerce-lakehouse"
+state_bucket = "ecommerce-lakehouse-tfstate-352505432441"
