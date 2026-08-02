@@ -1,7 +1,5 @@
 .claude
 admin-user_accessKeys.csv
-__init__.py
-__pycache__/*
 *.pdf
 
 # Terraform
@@ -12,12 +10,19 @@ terraform/bootstrap/.terraform.lock.hcl
 terraform/terraform.tfstate
 terraform/terraform.tfstate.backup
 terraform/terraform.tfvars
+terraform/bootstrap/terraform.tfvars
 terraform/*.tfplan
 
 # Python
+__pycache__/
 *.pyc
 .pytest_cache/
 .coverage
 htmlcov/
-Data
 .venv
+
+# Build artifacts — common.zip is produced by Terraform's archive_file at plan
+# time, not committed.
+glue_jobs/dist/
+
+Data

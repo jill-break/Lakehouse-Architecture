@@ -1,16 +1,11 @@
-# Runtime dependencies (available in Glue 4.0 environment)
-boto3>=1.26.0
-pandas>=1.5.0
-openpyxl>=3.1.0
-
-# Local development / testing
-pyspark==3.3.2
-delta-spark==2.3.0
-
-# Testing
-pytest>=7.4.0
-pytest-cov>=4.1.0
-
-# Linting
-flake8>=6.0.0
-black>=23.3.0
+# Runtime dependencies for the helper scripts (data generation and upload).
+#
+# The Glue jobs themselves need nothing from this file — Glue 4.0 ships boto3,
+# and Delta comes from --datalake-formats. openpyxl is gone with the xlsx read
+# path: the raw zone is CSV, which Spark reads natively across executors.
+#
+# Pinned exactly. "Reproducibility via GitHub Actions" is not reproducible if a
+# transitive minor release can change what CI installs tomorrow.
+boto3==1.43.62
+# 2.x is the last line that supports Python 3.10, the Glue 4.0 runtime.
+pandas==2.3.3
