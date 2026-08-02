@@ -1,0 +1,14 @@
+-r requirements.txt
+
+# Local Spark + Delta, matching the Glue 4.0 runtime (Spark 3.3 / Delta 2.3).
+pyspark==3.3.2
+delta-spark==2.3.0
+
+# Testing
+pytest==9.1.1
+pytest-cov==7.1.0
+moto[s3]==5.2.2
+
+# Linting and formatting
+flake8==7.3.0
+black==26.5.1
