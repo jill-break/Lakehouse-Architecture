@@ -26,3 +26,6 @@ htmlcov/
 glue_jobs/dist/
 
 Data
+
+# draw.io autosave backups
+.$*.bkp
