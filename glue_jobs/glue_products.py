@@ -1,9 +1,16 @@
 """
 Glue ETL Job: Products
-Reads products CSV from S3 raw zone, validates, deduplicates,
-upserts into a Delta Lake table, and archives the source file.
 
-Job parameters (--key value):
+Reads the products CSV from the S3 raw zone, validates, deduplicates, upserts
+into a Delta Lake table and archives the source files.
+
+The table is deliberately *unpartitioned*: 1,000 rows across 7 departments
+averages ~143 rows per partition, which costs more in file-listing overhead
+than it saves in pruning, and `department` is exactly the kind of attribute
+that gets reclassified. Z-ORDER on product_id (see glue_maintenance.py) gives
+the lookup performance without the small-file penalty.
+
+Job parameters:
   --S3_BUCKET        e.g. my-lakehouse-bucket
   --RAW_PREFIX       e.g. raw/products
   --DWH_PREFIX       e.g. lakehouse-dwh/products
@@ -12,121 +19,67 @@ Job parameters (--key value):
   --JOB_NAME         passed automatically by Glue
 """
 
-import sys
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
-import boto3
-
-from awsglue.context import GlueContext
-from awsglue.job import Job
-from awsglue.utils import getResolvedOptions
-from pyspark.context import SparkContext
-from pyspark.sql import functions as F
-from pyspark.sql.types import (
-    StructType,
-    StructField,
-    IntegerType,
-    StringType,
-)
-
-from common.utils import (
-    drop_null_pk,
-    drop_null_cols,
-    deduplicate,
-    upsert_to_delta_partitioned,
-    write_rejected,
-    archive_s3_object,
-)
-
-# ---------------------------------------------------------------------------
-# Bootstrap Glue / Spark context
-# ---------------------------------------------------------------------------
-args = getResolvedOptions(
-    sys.argv,
-    [
-        "JOB_NAME",
-        "S3_BUCKET",
-        "RAW_PREFIX",
-        "DWH_PREFIX",
-        "ARCHIVED_PREFIX",
-        "REJECTED_PREFIX",
-    ],
-)
-
-sc = SparkContext()
-glue_ctx = GlueContext(sc)
-spark = glue_ctx.spark_session
-job = Job(glue_ctx)
-job.init(args["JOB_NAME"], args)
-
-BUCKET = args["S3_BUCKET"]
-RAW_PATH = f"s3://{BUCKET}/{args['RAW_PREFIX']}"
-DWH_PATH = f"s3://{BUCKET}/{args['DWH_PREFIX']}"
-ARCHIVED_PREFIX = args["ARCHIVED_PREFIX"]
-REJECTED_PATH = f"s3://{BUCKET}/{args['REJECTED_PREFIX']}"
+from common.etl import DatasetConfig, run_dataset_etl
 
 PRODUCTS_SCHEMA = StructType(
     [
-        StructField("product_id", IntegerType(), nullable=False),
+        StructField("product_id", IntegerType(), nullable=True),
         StructField("department_id", IntegerType(), nullable=True),
         StructField("department", StringType(), nullable=True),
         StructField("product_name", StringType(), nullable=True),
     ]
 )
 
-# ---------------------------------------------------------------------------
-# 1. Read raw CSV
-# ---------------------------------------------------------------------------
-print(f"[products] Reading raw data from {RAW_PATH}")
-raw_df = spark.read.option("header", "true").schema(PRODUCTS_SCHEMA).csv(RAW_PATH)
-print(f"[products] Raw row count: {raw_df.count()}")
 
-# ---------------------------------------------------------------------------
-# 2. Validate
-# ---------------------------------------------------------------------------
-rejected = None
+def build_config(args: dict) -> DatasetConfig:
+    bucket = args["S3_BUCKET"]
+    return DatasetConfig(
+        name="products",
+        bucket=bucket,
+        raw_prefix=args["RAW_PREFIX"],
+        dwh_path=f"s3://{bucket}/{args['DWH_PREFIX']}",
+        archived_prefix=args["ARCHIVED_PREFIX"],
+        rejected_path=f"s3://{bucket}/{args['REJECTED_PREFIX']}",
+        schema=PRODUCTS_SCHEMA,
+        pk_col="product_id",
+        required_cols=["product_name"],
+        partition_col=None,
+        max_rejection_rate=float(args.get("MAX_REJECTION_RATE", 0.05)),
+    )
 
-valid_df, rejected = drop_null_pk(raw_df, "product_id", rejected, "null product_id")
-valid_df, rejected = drop_null_cols(valid_df, ["product_name"], rejected)
 
-# ---------------------------------------------------------------------------
-# 3. Deduplicate on product_id
-# ---------------------------------------------------------------------------
-valid_df = deduplicate(valid_df, pk_col="product_id")
-print(f"[products] Valid row count after dedup: {valid_df.count()}")
+def main(spark, args: dict, run_id: str = "local") -> dict:
+    return run_dataset_etl(spark, build_config(args), run_id)
 
-# ---------------------------------------------------------------------------
-# 4. Add ingestion metadata
-# ---------------------------------------------------------------------------
-valid_df = valid_df.withColumn("ingested_at", F.current_timestamp())
 
-# ---------------------------------------------------------------------------
-# 5. Upsert into Delta table (partitioned by department)
-# ---------------------------------------------------------------------------
-print(f"[products] Upserting into Delta table at {DWH_PATH}")
-upsert_to_delta_partitioned(
-    spark=spark,
-    source_df=valid_df,
-    delta_path=DWH_PATH,
-    merge_key="product_id",
-    partition_col="department",
-)
-print("[products] Upsert complete")
+if __name__ == "__main__":
+    import sys
 
-# ---------------------------------------------------------------------------
-# 6. Write rejected records
-# ---------------------------------------------------------------------------
-write_rejected(rejected, REJECTED_PATH, "products")
+    from awsglue.context import GlueContext
+    from awsglue.job import Job
+    from awsglue.utils import getResolvedOptions
+    from pyspark.context import SparkContext
 
-# ---------------------------------------------------------------------------
-# 7. Archive source files
-# ---------------------------------------------------------------------------
-s3_client = boto3.client("s3")
-paginator = s3_client.get_paginator("list_objects_v2")
-pages = paginator.paginate(Bucket=BUCKET, Prefix=args["RAW_PREFIX"])
-for page in pages:
-    for obj in page.get("Contents", []):
-        if not obj["Key"].endswith("/") and obj["Size"] > 0:
-            archive_s3_object(BUCKET, obj["Key"], ARCHIVED_PREFIX)
+    from common.logging_utils import resolve_run_id
 
-job.commit()
-print("[products] Job complete")
+    job_args = getResolvedOptions(
+        sys.argv,
+        [
+            "JOB_NAME",
+            "S3_BUCKET",
+            "RAW_PREFIX",
+            "DWH_PREFIX",
+            "ARCHIVED_PREFIX",
+            "REJECTED_PREFIX",
+        ],
+    )
+
+    glue_context = GlueContext(SparkContext())
+    glue_job = Job(glue_context)
+    glue_job.init(job_args["JOB_NAME"], job_args)
+
+    main(glue_context.spark_session, job_args, resolve_run_id(sys.argv))
+
+    glue_job.commit()
