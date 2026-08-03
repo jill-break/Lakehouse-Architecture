@@ -332,6 +332,7 @@ The destroy workflow now:
 | No incremental processing | Every pipeline run processes all files in `raw/`. There is no watermark or checkpoint — the idempotent Delta MERGE handles reruns safely but doesn't skip already-processed records. |
 | Athena table re-registration | After a full destroy and rebuild, the first Athena query fails until the crawler has run once. |
 | Manifests unverified | The maintenance job can still emit symlink manifests, but they are off by default on the assumption that Athena engine v3 reads the crawler's native Delta tables. That assumption has not been re-tested against a live catalog. |
+| Five tfsec findings waived | Every one is "use a customer-managed KMS key" (S3, SNS, two log groups) or "enable S3 access logging". Each is suppressed inline with the reasoning next to the resource, so anything *new* still fails the build. Two are rated HIGH by tfsec; both are about AWS-managed vs customer-managed key custody, not about data being unencrypted. Revisit before this holds anything regulated. |
 
 ---
 

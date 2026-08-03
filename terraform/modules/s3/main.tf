@@ -1,6 +1,7 @@
-# tfsec:ignore:aws-s3-enable-bucket-logging Server access logging needs a
-# second bucket whose only consumer would be itself; CloudTrail data events are
-# the better answer if this ever leaves the lab.
+# Accepted risk: server access logging needs a second bucket whose only
+# consumer would be itself. CloudTrail data events are the better answer if
+# this ever leaves the lab.
+# tfsec:ignore:AVD-AWS-0089
 resource "aws_s3_bucket" "lakehouse" {
   bucket        = var.bucket_name
   force_destroy = var.environment != "prod"
@@ -13,6 +14,11 @@ resource "aws_s3_bucket_versioning" "lakehouse" {
   }
 }
 
+# Accepted risk: SSE-S3 rather than a customer-managed KMS key. A CMK would add
+# a monthly key charge plus key policies for Glue, Athena and the crawler, and
+# the threat it defends against — AWS-side key custody — is not in scope for a
+# lab. Revisit before this holds anything regulated.
+# tfsec:ignore:AVD-AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "lakehouse" {
   bucket = aws_s3_bucket.lakehouse.id
   rule {

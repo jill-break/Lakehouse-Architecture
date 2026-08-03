@@ -56,7 +56,6 @@ module "s3" {
 
 module "iam" {
   source       = "./modules/iam"
-  bucket_name  = local.bucket_name
   bucket_arn   = module.s3.bucket_arn
   project_name = var.project_name
   environment  = var.environment

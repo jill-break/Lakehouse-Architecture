@@ -221,6 +221,9 @@ resource "aws_glue_crawler" "lakehouse" {
 }
 
 # ─── CloudWatch Log Group for Glue jobs ──────────────────────────────────────
+# Accepted risk: no CMK on the log group. Same reasoning as the state machine's
+# log group — the jobs log row counts and rejection reasons, not row contents.
+# tfsec:ignore:AVD-AWS-0017
 resource "aws_cloudwatch_log_group" "glue" {
   name              = "/aws-glue/jobs/${var.project_name}-${var.environment}"
   retention_in_days = 14
