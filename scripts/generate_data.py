@@ -8,6 +8,7 @@ Usage:
 
 import argparse
 import random
+from typing import Dict
 
 import pandas as pd
 
@@ -81,7 +82,8 @@ def generate_good() -> tuple:
     order_items_df = make_order_items(orders_df, products_df["product_id"].tolist())
 
     print(
-        f"Good data — {len(products_df)} products, {len(orders_df)} orders, {len(order_items_df)} order items"
+        f"Good data — {len(products_df)} products, {len(orders_df)} orders, "
+        f"{len(order_items_df)} order items"
     )
     return products_df, orders_df, order_items_df
 
@@ -115,7 +117,8 @@ def generate_bad() -> tuple:
     order_items_df = pd.concat([order_items_df, bad_iid, bad_ref], ignore_index=True)
 
     print(
-        f"Bad data — {len(products_df)} product rows, {len(orders_df)} order rows, {len(order_items_df)} order item rows"
+        f"Bad data — {len(products_df)} product rows, {len(orders_df)} order rows, "
+        f"{len(order_items_df)} order item rows"
     )
     print("  products:    5 null product_id (PK violation)")
     print("  orders:      5 null order_id, 3 null user_id, 2 invalid timestamps")
@@ -123,13 +126,37 @@ def generate_bad() -> tuple:
     return products_df, orders_df, order_items_df
 
 
+def generate(kind: str) -> Dict[str, pd.DataFrame]:
+    """Return {dataset_name: dataframe} for either the good or the bad batch."""
+    products_df, orders_df, order_items_df = (
+        generate_good() if kind == "good" else generate_bad()
+    )
+    return {
+        "products": products_df,
+        "orders": orders_df,
+        "order_items": order_items_df,
+    }
+
+
 def write_files(
-    products_df: pd.DataFrame, orders_df: pd.DataFrame, order_items_df: pd.DataFrame
-) -> None:
-    products_df.to_csv("/tmp/products.csv", index=False)
-    orders_df.to_excel("/tmp/orders.xlsx", index=False, engine="openpyxl")
-    order_items_df.to_excel("/tmp/order_items.xlsx", index=False, engine="openpyxl")
-    print("Files written to /tmp/products.csv, /tmp/orders.xlsx, /tmp/order_items.xlsx")
+    frames: Dict[str, pd.DataFrame], out_dir: str = "/tmp"
+) -> Dict[str, str]:
+    """
+    Write every dataset as CSV.
+
+    The raw zone is CSV-only on purpose: Spark reads CSV natively and in
+    parallel across executors, whereas xlsx has to be pulled into the driver
+    and parsed single-threaded by openpyxl. The brief specifies CSV ingestion
+    and this project controls its own input format, so there is no reason to
+    make the ETL work around a spreadsheet.
+    """
+    paths = {}
+    for name, frame in frames.items():
+        path = f"{out_dir}/{name}.csv"
+        frame.to_csv(path, index=False)
+        paths[name] = path
+        print(f"  wrote {path} ({len(frame)} rows)")
+    return paths
 
 
 if __name__ == "__main__":
@@ -140,11 +167,9 @@ if __name__ == "__main__":
         choices=["good", "bad"],
         help="Type of data to generate",
     )
+    parser.add_argument(
+        "--out-dir", default="/tmp", help="Directory to write the CSV files into"
+    )
     args = parser.parse_args()
 
-    if args.type == "good":
-        products_df, orders_df, order_items_df = generate_good()
-    else:
-        products_df, orders_df, order_items_df = generate_bad()
-
-    write_files(products_df, orders_df, order_items_df)
+    write_files(generate(args.type), args.out_dir)

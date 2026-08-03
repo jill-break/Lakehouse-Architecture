@@ -19,13 +19,46 @@ on:
       - ".gitignore"
       - "Data/**"
 
+# Two pushes to main in quick succession would otherwise run `terraform apply`
+# against the same state concurrently. Queue them instead of cancelling: a
+# half-finished apply that gets cancelled is worse than a slow one.
+concurrency:
+  group: lakehouse-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   TF_WORKING_DIR: terraform
+  TF_VERSION: "~1.10"
+  # Glue 4.0 runs Python 3.10 — test on what production executes.
+  PYTHON_VERSION: "3.10"
+
+permissions:
+  contents: read
 
 jobs:
+  # ─── Secret scanning ───────────────────────────────────────────────────────
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          VERSION=8.21.2
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+
+      - name: Scan history and working tree
+        run: |
+          gitleaks detect --redact --verbose --exit-code 1
+          gitleaks detect --no-git --redact --verbose --exit-code 1
+
   # ─── Python: lint + unit tests ─────────────────────────────────────────────
   lint-and-test:
-    name: Lint & Unit Tests
+    name: Lint & Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -33,36 +66,79 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
+      # No CLI overrides — .flake8 is the single source of truth for style,
+      # and scripts/ is linted like everything else.
       - name: Lint with flake8
-        run: |
-          flake8 glue_jobs/ \
-            --max-line-length=120 \
-            --ignore=E501,W503 \
-            --exclude=glue_jobs/common/__init__.py
+        run: flake8 glue_jobs/ tests/ scripts/
 
       - name: Format check with black
-        run: black --check glue_jobs/ tests/
+        run: black --check glue_jobs/ tests/ scripts/
 
-      - name: Run unit tests
-        run: pytest tests/ -v --tb=short --cov=glue_jobs --cov-report=term-missing
+      - name: Run tests
+        run: pytest -v --tb=short --cov=glue_jobs --cov-report=term-missing
 
-  # ─── Terraform: plan (PRs) + apply (main) in one job ─────────────────────
-  terraform:
-    name: Terraform
+  # ─── Terraform static analysis (no AWS credentials needed) ────────────────
+  terraform-checks:
+    name: Terraform Checks
     runs-on: ubuntu-latest
-    needs: lint-and-test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Format
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate (root)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Terraform Validate (bootstrap)
+        working-directory: ${{ env.TF_WORKING_DIR }}/bootstrap
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: TFLint
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          tflint --init
+          tflint --recursive
+
+      - name: tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: ${{ env.TF_WORKING_DIR }}
+          soft_fail: false
+
+  # ─── Plan on pull requests (read-only role) ───────────────────────────────
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    needs: [secret-scan, lint-and-test, terraform-checks]
+    # Fork PRs receive no secrets, so role-to-assume would be empty and the
+    # credentials step would fail with a confusing error.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
 
     permissions:
       id-token: write
@@ -70,37 +146,30 @@ jobs:
       pull-requests: write
 
     env:
-      TF_VAR_aws_region:   "us-east-1"
-      TF_VAR_environment:  "dev"
-      TF_VAR_alert_email:  ${{ secrets.ALERT_EMAIL }}
+      TF_VAR_aws_region: "eu-west-1"
+      TF_VAR_environment: "dev"
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials (OIDC, read-only)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: "us-east-1"
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: "eu-west-1"
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "~1.5"
+          terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
 
-      - name: Terraform Validate
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform validate
-
-      # On PRs — show the plan as a comment, do not apply
-      - name: Terraform Plan (PR only)
-        if: github.event_name == 'pull_request'
-        working-directory: ${{ env.TF_WORKING_DIR }}
+      - name: Terraform Plan
         id: plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           set +e
           terraform plan -no-color 2>&1 | tee plan.txt
@@ -109,7 +178,7 @@ jobs:
           exit $EXIT_CODE
 
       - name: Comment plan on PR
-        if: github.event_name == 'pull_request' && always()
+        if: always()
         uses: actions/github-script@v7
         with:
           script: |
@@ -126,26 +195,47 @@ jobs:
               body: `## ${status} Terraform Plan\n\`\`\`\n${truncated}\n\`\`\``
             });
 
-      # On main push — apply directly (no separate plan artifact needed)
-      - name: Terraform Apply (main only)
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+  # ─── Apply on main (deploy role) ──────────────────────────────────────────
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: [secret-scan, lint-and-test, terraform-checks]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      TF_VAR_aws_region: "eu-west-1"
+      TF_VAR_environment: "dev"
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: "eu-west-1"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      # Glue scripts and common.zip are uploaded by Terraform itself
+      # (modules/glue/main.tf) — one owner for one artifact.
+      - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform apply -auto-approve
 
       - name: Terraform Output
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform output
-
-      - name: Package and upload Glue scripts to S3
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        run: |
-          BUCKET=$(cd ${{ env.TF_WORKING_DIR }} && terraform output -raw s3_bucket_name)
-          python scripts/package_glue.py
-          aws s3 cp glue_jobs/dist/common.zip            s3://$BUCKET/glue-scripts/common.zip
-          aws s3 cp glue_jobs/glue_products.py           s3://$BUCKET/glue-scripts/glue_products.py
-          aws s3 cp glue_jobs/glue_orders.py             s3://$BUCKET/glue-scripts/glue_orders.py
-          aws s3 cp glue_jobs/glue_order_items.py        s3://$BUCKET/glue-scripts/glue_order_items.py
-          aws s3 cp glue_jobs/glue_generate_manifests.py s3://$BUCKET/glue-scripts/glue_generate_manifests.py
-          echo "All scripts uploaded to s3://$BUCKET/glue-scripts/"
-

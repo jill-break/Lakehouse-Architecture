@@ -1,3 +1,7 @@
+# Accepted risk: server access logging needs a second bucket whose only
+# consumer would be itself. CloudTrail data events are the better answer if
+# this ever leaves the lab.
+# tfsec:ignore:AVD-AWS-0089
 resource "aws_s3_bucket" "lakehouse" {
   bucket        = var.bucket_name
   force_destroy = var.environment != "prod"
@@ -10,6 +14,11 @@ resource "aws_s3_bucket_versioning" "lakehouse" {
   }
 }
 
+# Accepted risk: SSE-S3 rather than a customer-managed KMS key. A CMK would add
+# a monthly key charge plus key policies for Glue, Athena and the crawler, and
+# the threat it defends against — AWS-side key custody — is not in scope for a
+# lab. Revisit before this holds anything regulated.
+# tfsec:ignore:AVD-AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "lakehouse" {
   bucket = aws_s3_bucket.lakehouse.id
   rule {
@@ -17,6 +26,30 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "lakehouse" {
       sse_algorithm = "AES256"
     }
   }
+}
+
+# Reject any request that did not arrive over TLS.
+resource "aws_s3_bucket_policy" "require_tls" {
+  bucket = aws_s3_bucket.lakehouse.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource = [
+        aws_s3_bucket.lakehouse.arn,
+        "${aws_s3_bucket.lakehouse.arn}/*",
+      ]
+      Condition = {
+        Bool = { "aws:SecureTransport" = "false" }
+      }
+    }]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.lakehouse]
 }
 
 resource "aws_s3_bucket_public_access_block" "lakehouse" {

@@ -4,13 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       data_type:
-        description: 'Data to upload'
+        description: "Data to upload"
         required: true
-        default: 'good'
+        default: "good"
         type: choice
         options:
           - good
           - bad
+
+concurrency:
+  group: lakehouse-data-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   upload:
@@ -21,74 +28,42 @@ jobs:
       id-token: write
       contents: read
 
+    env:
+      TF_VAR_aws_region: "eu-west-1"
+      TF_VAR_environment: "dev"
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install boto3 openpyxl pandas -q
+        run: pip install -q boto3 pandas
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: "us-east-1"
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: "eu-west-1"
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "~1.5"
+          terraform_version: "~1.10"
 
       - name: Get bucket name
         id: bucket
         working-directory: terraform
-        env:
-          TF_VAR_aws_region:  "us-east-1"
-          TF_VAR_environment: "dev"
-          TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
         run: |
           terraform init -reconfigure
           echo "name=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
 
-      # ── Good data ─────────────────────────────────────────────────────────
-      - name: "[Good] Generate clean data"
-        if: github.event.inputs.data_type == 'good'
-        run: python scripts/generate_data.py --type good
-
-      - name: "[Good] Upload data files to S3"
-        if: github.event.inputs.data_type == 'good'
+      # Generates the batch, uploads every dataset as CSV, then drops the
+      # _READY marker that EventBridge is watching for.
+      - name: Upload batch and trigger the pipeline
         run: |
-          BUCKET="${{ steps.bucket.outputs.name }}"
-          aws s3 cp /tmp/products.csv     s3://$BUCKET/raw/products/products.csv
-          aws s3 cp /tmp/orders.xlsx      s3://$BUCKET/raw/orders/orders_apr_2025.xlsx
-          aws s3 cp /tmp/order_items.xlsx s3://$BUCKET/raw/order_items/order_items_apr_2025.xlsx
-
-      - name: "[Good] Signal pipeline (_READY)"
-        if: github.event.inputs.data_type == 'good'
-        run: |
-          BUCKET="${{ steps.bucket.outputs.name }}"
-          touch /tmp/_READY && aws s3 cp /tmp/_READY s3://$BUCKET/raw/_READY
-          echo "Pipeline triggered."
-
-      # ── Bad data ──────────────────────────────────────────────────────────
-      - name: "[Bad] Generate bad data"
-        if: github.event.inputs.data_type == 'bad'
-        run: python scripts/generate_data.py --type bad
-
-      - name: "[Bad] Upload bad data files to S3"
-        if: github.event.inputs.data_type == 'bad'
-        run: |
-          BUCKET="${{ steps.bucket.outputs.name }}"
-          aws s3 cp /tmp/products.csv     s3://$BUCKET/raw/products/products_bad.csv
-          aws s3 cp /tmp/orders.xlsx      s3://$BUCKET/raw/orders/orders_bad.xlsx
-          aws s3 cp /tmp/order_items.xlsx s3://$BUCKET/raw/order_items/order_items_bad.xlsx
-
-      - name: "[Bad] Signal pipeline (_READY)"
-        if: github.event.inputs.data_type == 'bad'
-        run: |
-          BUCKET="${{ steps.bucket.outputs.name }}"
-          touch /tmp/_READY && aws s3 cp /tmp/_READY s3://$BUCKET/raw/_READY
-          echo "Pipeline triggered. Check s3://$BUCKET/rejected/ after it completes."
+          python scripts/upload_data.py \
+            --bucket "${{ steps.bucket.outputs.name }}" \
+            --type "${{ github.event.inputs.data_type }}"

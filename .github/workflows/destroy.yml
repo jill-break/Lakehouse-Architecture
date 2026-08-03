@@ -4,8 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type DESTROY to confirm'
+        description: "Type DESTROY to confirm"
         required: true
+
+# Shares the lock group with the apply workflow so a destroy can never
+# interleave with an apply against the same state.
+concurrency:
+  group: lakehouse-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   destroy:
@@ -18,9 +27,9 @@ jobs:
       contents: read
 
     env:
-      TF_VAR_aws_region:   "us-east-1"
-      TF_VAR_environment:  "dev"
-      TF_VAR_alert_email:  ${{ secrets.ALERT_EMAIL }}
+      TF_VAR_aws_region: "eu-west-1"
+      TF_VAR_environment: "dev"
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
 
     steps:
       - uses: actions/checkout@v4
@@ -28,13 +37,12 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: "us-east-1"
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: "eu-west-1"
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "~1.5"
+          terraform_version: "~1.10"
 
       - name: Terraform Init (main)
         working-directory: terraform
@@ -44,7 +52,7 @@ jobs:
         run: |
           BUCKET=$(cd terraform && terraform output -raw s3_bucket_name)
           echo "Emptying s3://$BUCKET ..."
-          aws s3 rm s3://$BUCKET --recursive
+          aws s3 rm "s3://$BUCKET" --recursive
           echo "Bucket emptied."
 
       - name: Delete Athena workgroup contents
@@ -57,17 +65,13 @@ jobs:
         working-directory: terraform
         run: terraform destroy -auto-approve
 
-      # ── Re-apply bootstrap so CI can authenticate on the next run ─────────
-      - name: Terraform Init (bootstrap)
-        working-directory: terraform/bootstrap
-        run: terraform init
-
-      - name: Terraform Apply (bootstrap)
-        working-directory: terraform/bootstrap
-        run: terraform apply -auto-approve
-
       - name: Done
         run: |
           echo "Infrastructure destroyed."
-          echo "Bootstrap resources (OIDC + GitHub Actions role) have been re-applied."
-          echo "CI is ready to run terraform apply on the next push to main."
+          echo ""
+          echo "Bootstrap (OIDC provider + CI roles) lives in a separate state"
+          echo "that this workflow never touches, so CI can still authenticate"
+          echo "on the next push to main. It is also deliberately outside the"
+          echo "deploy role's permissions — CI cannot rewrite its own trust"
+          echo "policy. Apply terraform/bootstrap by hand if it ever needs to"
+          echo "change."

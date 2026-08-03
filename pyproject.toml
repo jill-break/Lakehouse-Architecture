@@ -1,0 +1,24 @@
+[tool.pytest.ini_options]
+# Replaces the sys.path.insert() block that every test file used to repeat —
+# and with it the `tests/*.py: E402` exception the linter needed.
+pythonpath = ["glue_jobs", "scripts"]
+testpaths = ["tests"]
+addopts = [
+    "--cov=glue_jobs",
+    "--cov-report=term-missing",
+    "--cov-fail-under=70",
+]
+markers = [
+    "integration: end-to-end run over a real local Spark + Delta table",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    # Glue bootstrap: instantiates a SparkContext and a Glue Job, neither of
+    # which exists outside the Glue runtime.
+    "if __name__ == .__main__.:",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]

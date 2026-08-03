@@ -1,161 +1,91 @@
 """
 Glue ETL Job: Orders
-Reads orders Excel file from S3 raw zone, validates, deduplicates,
-upserts into a Delta Lake table partitioned by date, and archives the source.
+
+Reads orders CSV files from the S3 raw zone, validates, deduplicates, upserts
+into a Delta Lake table partitioned by date, and archives the sources.
 
 Job parameters:
   --S3_BUCKET, --RAW_PREFIX, --DWH_PREFIX, --ARCHIVED_PREFIX,
   --REJECTED_PREFIX, --JOB_NAME
 """
 
-import io
-import sys
-
-import boto3
-import pandas as pd
-
-from awsglue.context import GlueContext
-from awsglue.job import Job
-from awsglue.utils import getResolvedOptions
-from pyspark.context import SparkContext
 from pyspark.sql import functions as F
-from pyspark.sql.types import IntegerType, LongType, DoubleType
-
-from common.utils import (
-    drop_null_pk,
-    drop_null_cols,
-    deduplicate,
-    upsert_to_delta_partitioned,
-    write_rejected,
-    archive_s3_object,
+from pyspark.sql.types import (
+    DoubleType,
+    IntegerType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
 )
 
-# ---------------------------------------------------------------------------
-# Bootstrap
-# ---------------------------------------------------------------------------
-args = getResolvedOptions(
-    sys.argv,
+from common.etl import DatasetConfig, run_dataset_etl
+
+# order_timestamp and date are read as strings and cast explicitly, so an
+# unparseable value becomes a null we can reject with an accurate reason
+# rather than a silent CSV-parser null.
+ORDERS_SCHEMA = StructType(
     [
-        "JOB_NAME",
-        "S3_BUCKET",
-        "RAW_PREFIX",
-        "DWH_PREFIX",
-        "ARCHIVED_PREFIX",
-        "REJECTED_PREFIX",
-    ],
+        StructField("order_num", IntegerType(), nullable=True),
+        StructField("order_id", LongType(), nullable=True),
+        StructField("user_id", LongType(), nullable=True),
+        StructField("order_timestamp", StringType(), nullable=True),
+        StructField("total_amount", DoubleType(), nullable=True),
+        StructField("date", StringType(), nullable=True),
+    ]
 )
 
-sc = SparkContext()
-glue_ctx = GlueContext(sc)
-spark = glue_ctx.spark_session
-job = Job(glue_ctx)
-job.init(args["JOB_NAME"], args)
 
-BUCKET = args["S3_BUCKET"]
-RAW_PATH = f"s3://{BUCKET}/{args['RAW_PREFIX']}"
-DWH_PATH = f"s3://{BUCKET}/{args['DWH_PREFIX']}"
-ARCHIVED_PREFIX = args["ARCHIVED_PREFIX"]
-REJECTED_PATH = f"s3://{BUCKET}/{args['REJECTED_PREFIX']}"
+def build_config(args: dict) -> DatasetConfig:
+    bucket = args["S3_BUCKET"]
+    return DatasetConfig(
+        name="orders",
+        bucket=bucket,
+        raw_prefix=args["RAW_PREFIX"],
+        dwh_path=f"s3://{bucket}/{args['DWH_PREFIX']}",
+        archived_prefix=args["ARCHIVED_PREFIX"],
+        rejected_path=f"s3://{bucket}/{args['REJECTED_PREFIX']}",
+        schema=ORDERS_SCHEMA,
+        pk_col="order_id",
+        required_cols=["user_id"],
+        casts={"order_timestamp": F.to_timestamp, "date": F.to_date},
+        timestamp_col="order_timestamp",
+        partition_col="date",
+        order_col="order_timestamp",
+        max_rejection_rate=float(args.get("MAX_REJECTION_RATE", 0.05)),
+    )
 
-# ---------------------------------------------------------------------------
-# 1. Read raw Excel via pandas → Spark
-#    Glue 4.0 workers have pandas available; xlsx needs openpyxl.
-# ---------------------------------------------------------------------------
-print(f"[orders] Reading raw data from {RAW_PATH}")
 
-s3 = boto3.client("s3")
-paginator = s3.get_paginator("list_objects_v2")
-pages = paginator.paginate(Bucket=BUCKET, Prefix=args["RAW_PREFIX"])
+def main(spark, args: dict, run_id: str = "local") -> dict:
+    return run_dataset_etl(spark, build_config(args), run_id)
 
-raw_keys = [
-    obj["Key"]
-    for page in pages
-    for obj in page.get("Contents", [])
-    if obj["Key"].endswith((".xlsx", ".csv"))
-]
 
-if not raw_keys:
-    print("[orders] No raw files found — nothing to do.")
-    job.commit()
-    import os
+if __name__ == "__main__":
+    import sys
 
-    os._exit(0)
+    from awsglue.context import GlueContext
+    from awsglue.job import Job
+    from awsglue.utils import getResolvedOptions
+    from pyspark.context import SparkContext
 
-dfs = []
-for key in raw_keys:
-    resp = s3.get_object(Bucket=BUCKET, Key=key)
-    body = resp["Body"].read()
-    if key.endswith(".xlsx"):
-        pdf = pd.read_excel(io.BytesIO(body), engine="openpyxl")
-    else:
-        pdf = pd.read_csv(io.BytesIO(body))
-    dfs.append(spark.createDataFrame(pdf))
+    from common.logging_utils import resolve_run_id
 
-raw_df = dfs[0]
-for d in dfs[1:]:
-    raw_df = raw_df.union(d)
+    job_args = getResolvedOptions(
+        sys.argv,
+        [
+            "JOB_NAME",
+            "S3_BUCKET",
+            "RAW_PREFIX",
+            "DWH_PREFIX",
+            "ARCHIVED_PREFIX",
+            "REJECTED_PREFIX",
+        ],
+    )
 
-# Cast columns to correct types
-raw_df = (
-    raw_df.withColumn("order_num", F.col("order_num").cast(IntegerType()))
-    .withColumn("order_id", F.col("order_id").cast(LongType()))
-    .withColumn("user_id", F.col("user_id").cast(LongType()))
-    .withColumn("order_timestamp", F.to_timestamp(F.col("order_timestamp")))
-    .withColumn("total_amount", F.col("total_amount").cast(DoubleType()))
-    .withColumn("date", F.to_date(F.col("date")))
-)
-print(f"[orders] Raw row count: {raw_df.count()}")
+    glue_context = GlueContext(SparkContext())
+    glue_job = Job(glue_context)
+    glue_job.init(job_args["JOB_NAME"], job_args)
 
-# ---------------------------------------------------------------------------
-# 2. Validate
-# ---------------------------------------------------------------------------
-rejected = None
+    main(glue_context.spark_session, job_args, resolve_run_id(sys.argv))
 
-valid_df, rejected = drop_null_pk(raw_df, "order_id", rejected, "null order_id")
-valid_df, rejected = drop_null_cols(valid_df, ["user_id"], rejected)
-
-# Validate timestamps (filter rows where order_timestamp is null after cast)
-invalid_ts_mask = F.col("order_timestamp").isNull()
-ts_rejected = valid_df.filter(invalid_ts_mask).withColumn(
-    "rejection_reason", F.lit("null or unparseable order_timestamp")
-)
-valid_df = valid_df.filter(~invalid_ts_mask)
-rejected = rejected.union(ts_rejected) if rejected is not None else ts_rejected
-
-# ---------------------------------------------------------------------------
-# 3. Deduplicate on order_id, keep latest by order_timestamp
-# ---------------------------------------------------------------------------
-valid_df = deduplicate(valid_df, pk_col="order_id", order_col="order_timestamp")
-print(f"[orders] Valid row count after dedup: {valid_df.count()}")
-
-# ---------------------------------------------------------------------------
-# 4. Add ingestion metadata
-# ---------------------------------------------------------------------------
-valid_df = valid_df.withColumn("ingested_at", F.current_timestamp())
-
-# ---------------------------------------------------------------------------
-# 5. Upsert into Delta table partitioned by date
-# ---------------------------------------------------------------------------
-print(f"[orders] Upserting into Delta table at {DWH_PATH}")
-upsert_to_delta_partitioned(
-    spark=spark,
-    source_df=valid_df,
-    delta_path=DWH_PATH,
-    merge_key="order_id",
-    partition_col="date",
-)
-print("[orders] Upsert complete")
-
-# ---------------------------------------------------------------------------
-# 6. Write rejected records
-# ---------------------------------------------------------------------------
-write_rejected(rejected, REJECTED_PATH, "orders")
-
-# ---------------------------------------------------------------------------
-# 7. Archive source files
-# ---------------------------------------------------------------------------
-for key in raw_keys:
-    archive_s3_object(BUCKET, key, ARCHIVED_PREFIX)
-
-job.commit()
-print("[orders] Job complete")
+    glue_job.commit()

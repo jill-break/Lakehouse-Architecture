@@ -1,8 +1,13 @@
 [flake8]
 max-line-length = 88
+# E203 and W503 disagree with black's formatting of slices and of line breaks
+# before binary operators. Everything else is enforced everywhere — CI no
+# longer passes conflicting overrides on the command line, and tests no longer
+# need an E402 exemption now that pyproject.toml sets pythonpath.
+extend-ignore = E203, W503
 exclude =
     .venv,
     venv,
     .git,
-per-file-ignores =
-    tests/*.py: E402
+    __pycache__,
+    glue_jobs/dist,

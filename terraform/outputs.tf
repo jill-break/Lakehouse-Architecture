@@ -35,6 +35,10 @@ output "glue_order_items_job_name" {
   value = module.glue.order_items_job_name
 }
 
+output "glue_maintenance_job_name" {
+  value = module.glue.maintenance_job_name
+}
+
 output "eventbridge_rule_name" {
   description = "EventBridge rule that auto-triggers the pipeline on S3 file upload"
   value       = module.eventbridge.rule_name

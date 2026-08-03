@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region to deploy resources into"
   type        = string
-  default     = "us-east-1"
+  default     = "eu-west-1"
 }
 
 variable "project_name" {
@@ -36,4 +36,19 @@ variable "glue_num_workers" {
   description = "Number of Glue workers per job"
   type        = number
   default     = 2
+}
+
+variable "max_rejection_rate" {
+  description = <<-DESC
+    Circuit breaker: an ETL job fails if more than this share of its input rows
+    is rejected, rather than merging nothing and reporting success.
+  DESC
+  type        = number
+  default     = 0.05
+}
+
+variable "vacuum_retention_hours" {
+  description = "Delta VACUUM retention window in hours (168 = Delta's 7-day safety floor)"
+  type        = number
+  default     = 168
 }
