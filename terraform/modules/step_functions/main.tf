@@ -24,6 +24,10 @@ resource "aws_sfn_state_machine" "pipeline" {
   }
 }
 
+# Accepted risk: no CMK on the log group. Execution logs carry job names and
+# error causes, not data; CMK encryption would need a KMS key policy granting
+# the CloudWatch Logs service principal, for no gain in this environment.
+# tfsec:ignore:AVD-AWS-0017
 resource "aws_cloudwatch_log_group" "sfn" {
   name              = "/aws/states/${var.project_name}-${var.environment}-pipeline"
   retention_in_days = 14
